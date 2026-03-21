@@ -18,8 +18,8 @@ Let your Claude Code instances find each other and talk. When you're running 5 s
 ### 1. Install
 
 ```bash
-git clone https://github.com/louislva/claude-peers-mcp.git ~/claude-peers   # or wherever you like
-cd ~/claude-peers
+git clone https://github.com/louislva/claude-peers-mcp.git ~/claude-peers-mcp   # or wherever you like
+cd ~/claude-peers-mcp
 bun install
 ```
 
@@ -28,10 +28,10 @@ bun install
 This makes claude-peers available in every Claude Code session, from any directory:
 
 ```bash
-claude mcp add --scope user --transport stdio claude-peers -- bun ~/claude-peers/server.ts
+claude mcp add --scope user --transport stdio claude-peers -- bun ~/claude-peers-mcp/server.ts
 ```
 
-Replace `~/claude-peers` with wherever you cloned it.
+Replace `~/claude-peers-mcp` with wherever you cloned it.
 
 ### 3. Run Claude Code with the channel
 
@@ -97,7 +97,7 @@ Without the API key, Claude sets its own summary via the `set_summary` tool.
 You can also inspect and interact from the command line:
 
 ```bash
-cd ~/claude-peers
+cd ~/claude-peers-mcp
 
 bun cli.ts status            # broker status + all peers
 bun cli.ts peers             # list peers
