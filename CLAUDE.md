@@ -10,26 +10,42 @@ Peer discovery and messaging MCP channel for Claude Code instances.
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP daemon on localhost:7899 + SQLite. Auto-launched by the MCP server.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker, exposes tools, pushes channel notifications.
+- `broker.ts` — HTTP daemon on 0.0.0.0:7899 + SQLite. Run once per network (not auto-launched). API key auth + group-based isolation.
+- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to remote broker via env vars, exposes tools, pushes channel notifications via WebSocket.
 - `shared/types.ts` — Shared TypeScript types for broker API.
+- `shared/auth.ts` — Hashing and token utilities for API key and group secret auth.
 - `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
 - `cli.ts` — CLI utility for inspecting broker state.
 
 ## Running
 
 ```bash
-# Start Claude Code with the channel:
+# On the broker host (run once):
+CLAUDE_PEERS_API_KEY=secret bun broker.ts
+
+# Start Claude Code with the channel (on any host):
+CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899 \
+CLAUDE_PEERS_API_KEY=secret \
+CLAUDE_PEERS_GROUP_SECRET=mygroup \
 claude --dangerously-load-development-channels server:claude-peers
 
-# Or just add to .mcp.json and use as regular MCP (no channel push, but tools work):
-# { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
+# Or add to .mcp.json (no channel push, but tools work):
+# {
+#   "claude-peers": {
+#     "command": "bun",
+#     "args": ["~/claude-peers-mcp/server.ts"],
+#     "env": {
+#       "CLAUDE_PEERS_BROKER_URL": "http://10.0.0.5:7899",
+#       "CLAUDE_PEERS_API_KEY": "secret",
+#       "CLAUDE_PEERS_GROUP_SECRET": "mygroup"
+#     }
+#   }
+# }
 
-# CLI:
-bun cli.ts status
+# CLI (requires same env vars):
+CLAUDE_PEERS_BROKER_URL=... CLAUDE_PEERS_API_KEY=... bun cli.ts status
 bun cli.ts peers
 bun cli.ts send <peer-id> <message>
-bun cli.ts kill-broker
 ```
 
 ## Bun
