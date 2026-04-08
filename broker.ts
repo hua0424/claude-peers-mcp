@@ -10,7 +10,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { hashSecret, deriveGroupId, generateToken, generatePeerId } from "./shared/auth.ts";
+import { hashSecret, deriveGroupId, generateToken, generatePeerId, safeEqual } from "./shared/auth.ts";
 import type {
   RegisterRequest,
   RegisterResponse,
@@ -142,14 +142,38 @@ const countPeers = db.prepare(`
   SELECT COUNT(*) as count FROM peers
 `);
 
+// --- Stale peer cleanup ---
+
+const STALE_PEER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const deleteStalePeers = db.prepare(`
+  DELETE FROM peers WHERE last_seen < ?
+`);
+
+function cleanStalePeers() {
+  const cutoff = new Date(Date.now() - STALE_PEER_TTL_MS).toISOString();
+  const result = deleteStalePeers.run(cutoff);
+  if (result.changes > 0) {
+    console.error(`[claude-peers broker] Cleaned ${result.changes} stale peer(s)`);
+  }
+}
+
+cleanStalePeers();
+setInterval(cleanStalePeers, 60 * 60 * 1000); // every hour
+
 // --- WebSocket connection pool ---
 
 const wsPool = new Map<PeerId, any>(); // Map<PeerId, ServerWebSocket>
 
+// --- Input limits ---
+
+const MAX_MESSAGE_LENGTH = 100_000; // 100KB
+const MAX_SUMMARY_LENGTH = 1_000;   // 1KB
+
 // --- Auth helpers ---
 
 function verifyApiKey(key: string): boolean {
-  return key === API_KEY;
+  return safeEqual(key, API_KEY!);
 }
 
 function lookupPeerByToken(token: string): Peer | null {
@@ -167,15 +191,12 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
   const secretHash = hashSecret(body.group_secret);
 
   // Auto-create group if first use
-  const existingGroup = selectGroup.get(groupId) as { group_id: string } | null;
+  const existingGroup = selectGroup.get(groupId) as { group_id: string; group_secret_hash: string } | null;
   if (!existingGroup) {
     insertGroup.run(groupId, secretHash, new Date().toISOString());
-  } else {
-    // Verify secret matches (different secrets could theoretically collide on first 16 chars)
-    const groupRow = db.query("SELECT group_secret_hash FROM groups WHERE group_id = ?").get(groupId) as { group_secret_hash: string } | null;
-    if (groupRow && groupRow.group_secret_hash !== secretHash) {
-      return { error: "Group secret mismatch" };
-    }
+  } else if (!safeEqual(existingGroup.group_secret_hash, secretHash)) {
+    // Different secrets could theoretically collide on first 16 chars of SHA-256
+    return { error: "Group secret mismatch" };
   }
 
   // Remove existing registration for same hostname + pid (re-registration)
@@ -222,6 +243,10 @@ function handleListPeers(body: ListPeersRequest, callerPeer: Peer): Peer[] {
 }
 
 function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: boolean; error?: string } {
+  if (body.text.length > MAX_MESSAGE_LENGTH) {
+    return { ok: false, error: `Message too long (max ${MAX_MESSAGE_LENGTH} chars)` };
+  }
+
   // Verify target exists and is in the same group
   const target = selectPeerById.get(body.to_id) as Peer | null;
   if (!target || target.group_id !== callerPeer.group_id) {
@@ -229,7 +254,8 @@ function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: bo
   }
 
   const now = new Date().toISOString();
-  insertMessage.run(callerPeer.id, body.to_id, body.text, now);
+  const result = insertMessage.run(callerPeer.id, body.to_id, body.text, now);
+  const messageId = Number(result.lastInsertRowid);
 
   // Try to push via WebSocket if target is connected
   const targetWs = wsPool.get(body.to_id);
@@ -245,13 +271,7 @@ function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: bo
     };
     try {
       targetWs.send(JSON.stringify(pushMsg));
-      // Mark as delivered since we pushed it
-      const lastMsg = db.query(
-        "SELECT id FROM messages WHERE from_id = ? AND to_id = ? AND sent_at = ? ORDER BY id DESC LIMIT 1"
-      ).get(callerPeer.id, body.to_id, now) as { id: number } | null;
-      if (lastMsg) {
-        markDelivered.run(lastMsg.id);
-      }
+      markDelivered.run(messageId);
     } catch {
       // WebSocket send failed, message stays undelivered for later
     }
@@ -260,8 +280,12 @@ function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: bo
   return { ok: true };
 }
 
-function handleSetSummary(body: SetSummaryRequest, callerPeer: Peer): void {
+function handleSetSummary(body: SetSummaryRequest, callerPeer: Peer): { ok: boolean; error?: string } {
+  if (body.summary.length > MAX_SUMMARY_LENGTH) {
+    return { ok: false, error: `Summary too long (max ${MAX_SUMMARY_LENGTH} chars)` };
+  }
   updateSummary.run(body.summary, callerPeer.id);
+  return { ok: true };
 }
 
 function handleUnregister(callerPeer: Peer): void {
@@ -383,8 +407,7 @@ Bun.serve<WsData>({
           case "/send-message":
             return Response.json(handleSendMessage(body as SendMessageRequest, callerPeer));
           case "/set-summary":
-            handleSetSummary(body as SetSummaryRequest, callerPeer);
-            return Response.json({ ok: true });
+            return Response.json(handleSetSummary(body as SetSummaryRequest, callerPeer));
           case "/unregister":
             handleUnregister(callerPeer);
             return Response.json({ ok: true });
