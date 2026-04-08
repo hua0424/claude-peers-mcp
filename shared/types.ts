@@ -4,9 +4,11 @@ export type PeerId = string;
 export interface Peer {
   id: PeerId;
   pid: number;
+  hostname: string;
   cwd: string;
   git_root: string | null;
-  tty: string | null;
+  group_id: string;
+  instance_token: string;
   summary: string;
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
@@ -21,47 +23,51 @@ export interface Message {
   delivered: boolean;
 }
 
-// --- Broker API types ---
+// --- Broker API request/response types ---
 
 export interface RegisterRequest {
+  api_key: string;
+  group_secret: string;
   pid: number;
+  hostname: string;
   cwd: string;
   git_root: string | null;
-  tty: string | null;
   summary: string;
 }
 
 export interface RegisterResponse {
   id: PeerId;
-}
-
-export interface HeartbeatRequest {
-  id: PeerId;
+  instance_token: string;
 }
 
 export interface SetSummaryRequest {
-  id: PeerId;
   summary: string;
 }
 
 export interface ListPeersRequest {
-  scope: "machine" | "directory" | "repo";
-  // The requesting peer's context (used for filtering)
+  scope: "group" | "directory" | "repo";
   cwd: string;
+  hostname: string;
   git_root: string | null;
-  exclude_id?: PeerId;
 }
 
 export interface SendMessageRequest {
-  from_id: PeerId;
   to_id: PeerId;
   text: string;
 }
 
-export interface PollMessagesRequest {
-  id: PeerId;
+export interface UnregisterRequest {
+  // no body needed — peer ID derived from token
 }
 
-export interface PollMessagesResponse {
-  messages: Message[];
+// --- WebSocket message types (broker → instance) ---
+
+export interface WsPushMessage {
+  type: "message";
+  from_id: PeerId;
+  from_summary: string;
+  from_cwd: string;
+  from_hostname: string;
+  text: string;
+  sent_at: string;
 }
