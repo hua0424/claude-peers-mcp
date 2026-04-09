@@ -91,29 +91,36 @@ claude mcp add --scope user --transport stdio claude-peers \
 - `CLAUDE_PEERS_API_KEY` — must match the broker's key exactly
 - `CLAUDE_PEERS_GROUP_SECRET` — any string; instances with the same secret form a group
 
-> **Multiple groups on one machine:** Different projects can use different group secrets. Configure per-directory via `.mcp.json`:
+> **Alternative: per-directory `.mcp.json`** — instead of `claude mcp add`, you can create a `.mcp.json` in your project directory. This is useful for per-project group secrets:
 >
 > ```json
 > {
->   "claude-peers": {
->     "command": "bun",
->     "args": ["~/claude-peers-mcp/server.ts"],
->     "env": {
->       "CLAUDE_PEERS_BROKER_URL": "http://10.0.0.5:7899",
->       "CLAUDE_PEERS_API_KEY": "my-secret-key-123",
->       "CLAUDE_PEERS_GROUP_SECRET": "team-alpha"
+>   "mcpServers": {
+>     "claude-peers": {
+>       "type": "stdio",
+>       "command": "bun",
+>       "args": ["/home/user/claude-peers-mcp/server.ts"],
+>       "env": {
+>         "CLAUDE_PEERS_BROKER_URL": "http://10.0.0.5:7899",
+>         "CLAUDE_PEERS_API_KEY": "my-secret-key-123",
+>         "CLAUDE_PEERS_GROUP_SECRET": "team-alpha"
+>       }
 >     }
 >   }
 > }
 > ```
+>
+> With `.mcp.json`, skip Step 3 — just start Claude Code normally in that directory and the MCP server loads automatically.
 
 ## Step 4: Start Claude Code
 
-Launch Claude Code with channel support:
+Launch Claude Code with channel support (enables real-time message push):
 
 ```bash
-claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-peers
+claude --dangerously-load-development-channels server:claude-peers
 ```
+
+Without the channel flag, MCP tools still work but incoming messages won't push automatically — you'd need Claude to call `check_messages` manually.
 
 > **Tip:** Add an alias so you don't have to type it every time:
 >
@@ -232,6 +239,14 @@ All three environment variables are required: `CLAUDE_PEERS_BROKER_URL`, `CLAUDE
 - Verify the broker is running and reachable: `curl http://<broker-host>:7899/health?api_key=your-key`
 - Check that `CLAUDE_PEERS_API_KEY` matches between broker and client
 - If the broker was restarted, the MCP server will automatically re-register after 3 failed reconnect attempts
+
+**MCP server connected but tools not available in Claude session**
+
+The broker shows "WS connected" and `/mcp` shows "Connected", but `list_peers` etc. are not callable:
+
+- Restart Claude Code — MCP tools sometimes fail to load on first connection
+- Verify server.ts runs correctly standalone: `CLAUDE_PEERS_BROKER_URL=... CLAUDE_PEERS_API_KEY=... CLAUDE_PEERS_GROUP_SECRET=... bun server.ts 2>&1`
+- Check that all log lines appear (CWD, Git root, Hostname, Broker, Registered, WebSocket connected, MCP connected)
 
 **Peers can't see each other**
 
