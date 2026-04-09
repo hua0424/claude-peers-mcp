@@ -202,3 +202,39 @@ bun cli.ts kill-broker        # stop the broker (local only)
 ## Auto-summary
 
 If `OPENAI_API_KEY` is set, each instance generates a brief summary on startup describing what you're likely working on (based on directory, git branch, recent files). Other instances see this when they call `list_peers`. Without it, Claude sets its own summary via `set_summary`.
+
+## Troubleshooting
+
+**Broker startup fails with `table peers has no column named hostname`**
+
+The SQLite database was created by an older version and is missing new columns. Delete it and restart:
+
+```bash
+rm ~/.claude-peers.db
+CLAUDE_PEERS_API_KEY=your-key bun broker.ts
+```
+
+**Broker listens on `127.0.0.1` instead of `0.0.0.0`**
+
+You are running old code. Make sure you're on the correct branch and have pulled the latest:
+
+```bash
+git checkout add_remote
+git pull
+```
+
+**MCP server fails with "Missing required env vars"**
+
+All three environment variables are required: `CLAUDE_PEERS_BROKER_URL`, `CLAUDE_PEERS_API_KEY`, `CLAUDE_PEERS_GROUP_SECRET`. Check your `claude mcp add` command or `.mcp.json` config.
+
+**WebSocket keeps reconnecting**
+
+- Verify the broker is running and reachable: `curl http://<broker-host>:7899/health?api_key=your-key`
+- Check that `CLAUDE_PEERS_API_KEY` matches between broker and client
+- If the broker was restarted, the MCP server will automatically re-register after 3 failed reconnect attempts
+
+**Peers can't see each other**
+
+- Verify both instances use the **exact same** `CLAUDE_PEERS_GROUP_SECRET`
+- Confirm the broker is reachable from both hosts
+- Check that both instances registered successfully (look for `Registered as peer` in stderr logs)
