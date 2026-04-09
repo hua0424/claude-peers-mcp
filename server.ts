@@ -30,6 +30,10 @@ import {
   getRecentFiles,
 } from "./shared/summarize.ts";
 import { hostname } from "node:os";
+import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions } from "./shared/session.ts";
+import { deriveGroupId } from "./shared/auth.ts";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 
 // --- Configuration ---
 
@@ -43,6 +47,10 @@ if (!BROKER_URL || !API_KEY || !GROUP_SECRET) {
   );
   process.exit(1);
 }
+
+const SESSION_DIR = join(process.env.HOME ?? "/tmp", ".claude-peers", "sessions");
+const GROUP_ID = deriveGroupId(GROUP_SECRET!);
+mkdirSync(SESSION_DIR, { recursive: true });
 
 // Derive WS URL from HTTP URL
 const WS_URL = BROKER_URL.replace(/^http/, "ws");
@@ -110,7 +118,19 @@ async function register(summary: string): Promise<void> {
   });
   myId = reg.id;
   myToken = reg.instance_token;
+  saveCurrentSession();
   log(`Registered as peer ${myId}`);
+}
+
+function saveCurrentSession(): void {
+  if (!myId || !myToken) return;
+  saveSession(SESSION_DIR, {
+    peer_id: myId,
+    instance_token: myToken,
+    cwd: myCwd,
+    group_id: GROUP_ID,
+    hostname: myHostname,
+  });
 }
 
 // --- WebSocket connection ---
@@ -173,21 +193,35 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     try {
-      // After repeated failures, token may be invalid (broker restarted).
-      // Re-register to get a fresh token before reconnecting.
       if (wsFailCount >= RE_REGISTER_AFTER_FAILURES) {
-        log("Multiple WS failures, re-registering with broker...");
+        log("Multiple WS failures, attempting /resume...");
         try {
-          await register(initialSummary);
-          wsFailCount = 0;
+          const res = await fetch(`${BROKER_URL}/resume`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ instance_token: myToken }),
+          });
+          if (res.ok) {
+            log("Resume successful, reconnecting WS...");
+            wsFailCount = 0;
+          } else if (res.status === 401) {
+            log("Token invalid, re-registering...");
+            await register(initialSummary);
+            wsFailCount = 0;
+          }
+          // 409 means someone else took it — re-register
+          else if (res.status === 409) {
+            log("Session taken by another connection, re-registering...");
+            await register(initialSummary);
+            wsFailCount = 0;
+          }
         } catch (e) {
-          log(`Re-register failed: ${e instanceof Error ? e.message : String(e)}`);
-          // Will retry on next cycle
+          log(`Resume/re-register failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       connectWebSocket();
     } catch {
-      // If connect fails, the onclose handler will schedule another retry
+      // onclose will schedule another retry
     }
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
@@ -213,6 +247,8 @@ Available tools:
 - send_message: Send a message to another instance by ID
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
 - check_messages: Manually check for new messages (messages normally arrive via WebSocket push)
+- set_id: Set a custom peer ID (e.g. 'my-review-bot')
+- switch_id: Switch to a different peer identity if the wrong one was auto-resumed
 
 When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
   }
@@ -281,6 +317,36 @@ const TOOLS = [
       properties: {},
     },
   },
+  {
+    name: "set_id",
+    description:
+      "Set a custom peer ID for this session. The ID must be 1-16 lowercase alphanumeric characters or hyphens. Fails if the ID is already taken by another peer in your group.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string" as const,
+          description: "The custom peer ID to set (e.g. 'my-review-session')",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "switch_id",
+    description:
+      "Switch to a different peer identity. Looks up a local session file for the target ID and resumes that session. Useful if the wrong session was auto-resumed on startup.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string" as const,
+          description: "The peer ID to switch to (must exist as a local session file)",
+        },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 // --- Tool handlers ---
@@ -334,13 +400,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           ],
         };
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
+          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
+          : msg.includes("401")
+          ? "Authentication failed. Check your API key and group secret."
+          : `Broker error: ${msg}`;
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error listing peers: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: friendly }],
           isError: true,
         };
       }
@@ -369,13 +436,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           content: [{ type: "text" as const, text: `Message sent to peer ${to_id}` }],
         };
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
+          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
+          : msg.includes("401")
+          ? "Authentication failed. Check your API key and group secret."
+          : `Broker error: ${msg}`;
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error sending message: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: friendly }],
           isError: true,
         };
       }
@@ -395,13 +463,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           content: [{ type: "text" as const, text: `Summary updated: "${summary}"` }],
         };
       } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
+          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
+          : msg.includes("401")
+          ? "Authentication failed. Check your API key and group secret."
+          : `Broker error: ${msg}`;
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error setting summary: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: friendly }],
           isError: true,
         };
       }
@@ -428,12 +497,105 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       };
     }
 
+    case "set_id": {
+      const { id } = args as { id: string };
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ id?: string; error?: string }>("/set-id", { new_id: id });
+        if (result.error) {
+          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        }
+        const oldId = myId;
+        myId = result.id!;
+        deleteSession(SESSION_DIR, oldId);
+        saveCurrentSession();
+        return { content: [{ type: "text" as const, text: `ID changed from ${oldId} to ${myId}` }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      }
+    }
+
+    case "switch_id": {
+      const { id } = args as { id: string };
+      const targetSession = loadSession(SESSION_DIR, id);
+      if (!targetSession) {
+        return { content: [{ type: "text" as const, text: `No local session found for peer ${id}` }], isError: true };
+      }
+      try {
+        const res = await fetch(`${BROKER_URL}/resume`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instance_token: targetSession.instance_token }),
+        });
+        if (!res.ok) {
+          const data = await res.json() as { error: string };
+          return { content: [{ type: "text" as const, text: `Cannot switch: ${data.error}` }], isError: true };
+        }
+        // Dormant current session
+        if (myToken) {
+          try { await brokerFetch("/unregister", {}); } catch { /* best effort */ }
+        }
+        // Adopt target identity
+        const oldId = myId;
+        myId = targetSession.peer_id;
+        myToken = targetSession.instance_token;
+        saveCurrentSession();
+        // Reconnect WS with new token
+        if (ws) ws.close();
+        connectWebSocket();
+        return { content: [{ type: "text" as const, text: `Switched from ${oldId} to ${myId}` }] };
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 });
 
 // --- Startup ---
+
+async function tryResumeSession(): Promise<boolean> {
+  cleanupStaleSessions(SESSION_DIR, 7);
+  const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID);
+
+  for (const session of sessions) {
+    try {
+      const res = await fetch(`${BROKER_URL}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instance_token: session.instance_token }),
+      });
+
+      if (res.ok) {
+        const data = await res.json() as { id: string; instance_token: string };
+        myId = data.id;
+        myToken = data.instance_token;
+        saveCurrentSession();
+        log(`Resumed session as peer ${myId}`);
+        return true;
+      }
+
+      if (res.status === 409) {
+        log(`Session ${session.peer_id} has active connection, skipping`);
+        continue;
+      }
+
+      if (res.status === 401) {
+        log(`Session ${session.peer_id} token invalid, removing stale file`);
+        deleteSession(SESSION_DIR, session.peer_id);
+        continue;
+      }
+    } catch {
+      // Broker unreachable, will fail on register too
+      return false;
+    }
+  }
+  return false;
+}
 
 async function main() {
   // 1. Gather context
@@ -469,8 +631,11 @@ async function main() {
   // Wait briefly for summary, but don't block startup
   await Promise.race([summaryPromise, new Promise((r) => setTimeout(r, 3000))]);
 
-  // 3. Register with broker
-  await register(initialSummary);
+  // 3. Try to resume existing session, or register new
+  const resumed = await tryResumeSession();
+  if (!resumed) {
+    await register(initialSummary);
+  }
 
   // If summary generation is still running, update it when done
   if (!initialSummary) {
