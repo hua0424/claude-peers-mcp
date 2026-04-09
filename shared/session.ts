@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, unlinkSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, unlinkSync, existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
 export interface SessionData {
@@ -19,7 +19,9 @@ export function saveSession(dir: string, data: SessionData): void {
     created_at: data.created_at ?? now,
     last_used: now,
   };
-  writeFileSync(join(dir, `${data.peer_id}.json`), JSON.stringify(record, null, 2));
+  const filePath = join(dir, `${data.peer_id}.json`);
+  writeFileSync(filePath, JSON.stringify(record, null, 2));
+  chmodSync(filePath, 0o600);
 }
 
 export function loadSession(dir: string, peerId: string): SessionData | null {

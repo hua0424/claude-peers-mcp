@@ -106,6 +106,16 @@ async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function friendlyError(e: unknown): { content: Array<{ type: "text"; text: string }>; isError: true } {
+  const msg = e instanceof Error ? e.message : String(e);
+  const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
+    ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
+    : msg.includes("401")
+    ? "Authentication failed. Check your API key and group secret."
+    : `Broker error: ${msg}`;
+  return { content: [{ type: "text" as const, text: friendly }], isError: true };
+}
+
 async function register(summary: string): Promise<void> {
   const reg = await brokerFetch<RegisterResponse>("/register", {
     api_key: API_KEY,
@@ -199,7 +209,7 @@ function scheduleReconnect() {
           const res = await fetch(`${BROKER_URL}/resume`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ instance_token: myToken }),
+            body: JSON.stringify({ api_key: API_KEY, instance_token: myToken }),
           });
           if (res.ok) {
             log("Resume successful, reconnecting WS...");
@@ -400,16 +410,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           ],
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
-          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
-          : msg.includes("401")
-          ? "Authentication failed. Check your API key and group secret."
-          : `Broker error: ${msg}`;
-        return {
-          content: [{ type: "text" as const, text: friendly }],
-          isError: true,
-        };
+        return friendlyError(e);
       }
     }
 
@@ -436,16 +437,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           content: [{ type: "text" as const, text: `Message sent to peer ${to_id}` }],
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
-          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
-          : msg.includes("401")
-          ? "Authentication failed. Check your API key and group secret."
-          : `Broker error: ${msg}`;
-        return {
-          content: [{ type: "text" as const, text: friendly }],
-          isError: true,
-        };
+        return friendlyError(e);
       }
     }
 
@@ -458,21 +450,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
       try {
-        await brokerFetch("/set-summary", { summary });
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-summary", { summary });
+        if (!result.ok) {
+          return {
+            content: [{ type: "text" as const, text: `Failed: ${result.error}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: "text" as const, text: `Summary updated: "${summary}"` }],
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const friendly = msg.includes("fetch failed") || msg.includes("ECONNREFUSED")
-          ? "Broker is not reachable. Messages and peer discovery are temporarily unavailable."
-          : msg.includes("401")
-          ? "Authentication failed. Check your API key and group secret."
-          : `Broker error: ${msg}`;
-        return {
-          content: [{ type: "text" as const, text: friendly }],
-          isError: true,
-        };
+        return friendlyError(e);
       }
     }
 
@@ -527,7 +516,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await fetch(`${BROKER_URL}/resume`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instance_token: targetSession.instance_token }),
+          body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
         });
         if (!res.ok) {
           const data = await res.json() as { error: string };
@@ -567,7 +556,7 @@ async function tryResumeSession(): Promise<boolean> {
       const res = await fetch(`${BROKER_URL}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instance_token: session.instance_token }),
+        body: JSON.stringify({ api_key: API_KEY, instance_token: session.instance_token }),
       });
 
       if (res.ok) {

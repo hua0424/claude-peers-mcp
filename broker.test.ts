@@ -423,7 +423,7 @@ test("resume succeeds for dormant peer", async () => {
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instance_token: peer.instance_token }),
+    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
   });
   expect(resumeRes.ok).toBe(true);
   const resumed = await resumeRes.json() as { id: string };
@@ -449,7 +449,7 @@ test("resume fails with active WS connection", async () => {
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instance_token: peer.instance_token }),
+    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
   });
   expect(resumeRes.status).toBe(409);
 

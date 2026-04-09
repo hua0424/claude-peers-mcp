@@ -324,7 +324,10 @@ function handleUnregister(callerPeer: Peer): void {
   updatePeerStatus.run("dormant", now, callerPeer.id);
 }
 
-function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
+function handleResume(body: ResumeRequest & { api_key?: string }): { id: string; instance_token: string } | { error: string; status: number } {
+  if (!body.api_key || !verifyApiKey(body.api_key)) {
+    return { error: "Invalid API key", status: 401 };
+  }
   const peer = selectPeerByToken.get(body.instance_token) as Peer | null;
   if (!peer) {
     return { error: "Invalid token", status: 401 };
@@ -345,17 +348,18 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(newId)) {
     return { error: "Invalid ID format. Must be 1-16 lowercase alphanumeric characters or hyphens, starting with alphanumeric.", status: 400 };
   }
-  // Check uniqueness within group
-  const existing = selectPeerByIdAndGroup.get(newId, callerPeer.group_id) as Peer | null;
+  // Check global uniqueness (peers.id is PRIMARY KEY)
+  const existing = selectPeerById.get(newId) as Peer | null;
   if (existing) {
     return { error: "ID already taken", status: 409 };
   }
   const oldId = callerPeer.id;
-  // Update peer ID
-  updatePeerId.run(newId, oldId);
-  // Migrate messages
-  updateMessageFromId.run(newId, oldId);
-  updateMessageToId.run(newId, oldId);
+  // Atomic DB update
+  db.transaction(() => {
+    updatePeerId.run(newId, oldId);
+    updateMessageFromId.run(newId, oldId);
+    updateMessageToId.run(newId, oldId);
+  })();
   // Update WS pool
   const existingWs = wsPool.get(oldId);
   if (existingWs) {
