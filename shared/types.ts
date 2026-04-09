@@ -12,6 +12,7 @@ export interface Peer {
   summary: string;
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
+  status: "active" | "dormant";
 }
 
 export interface Message {
@@ -58,6 +59,23 @@ export interface SendMessageRequest {
 
 export interface UnregisterRequest {
   // no body needed — peer ID derived from token
+}
+
+export interface ResumeRequest {
+  instance_token: string;
+}
+
+export interface ResumeResponse {
+  id: PeerId;
+  instance_token: string;
+}
+
+export interface SetIdRequest {
+  new_id: string;
+}
+
+export interface SetIdResponse {
+  id: PeerId;
 }
 
 // --- WebSocket message types (broker → instance) ---
