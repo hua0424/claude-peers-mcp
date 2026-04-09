@@ -17,6 +17,8 @@ import type {
   SetSummaryRequest,
   ListPeersRequest,
   SendMessageRequest,
+  ResumeRequest,
+  SetIdRequest,
   Peer,
   Message,
   PeerId,
@@ -58,9 +60,17 @@ db.run(`
     summary TEXT NOT NULL DEFAULT '',
     registered_at TEXT NOT NULL,
     last_seen TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
     FOREIGN KEY (group_id) REFERENCES groups(group_id)
   )
 `);
+
+// Migration: add status column if missing
+try {
+  db.run("ALTER TABLE peers ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+} catch {
+  // Column already exists
+}
 
 db.run(`
   CREATE TABLE IF NOT EXISTS messages (
@@ -114,15 +124,15 @@ const updateLastSeen = db.prepare(`
 `);
 
 const selectPeersByGroup = db.prepare(`
-  SELECT * FROM peers WHERE group_id = ?
+  SELECT * FROM peers WHERE group_id = ? AND status = 'active'
 `);
 
 const selectPeersByGroupAndCwdAndHost = db.prepare(`
-  SELECT * FROM peers WHERE group_id = ? AND cwd = ? AND hostname = ?
+  SELECT * FROM peers WHERE group_id = ? AND cwd = ? AND hostname = ? AND status = 'active'
 `);
 
 const selectPeersByGroupAndGitRoot = db.prepare(`
-  SELECT * FROM peers WHERE group_id = ? AND git_root = ?
+  SELECT * FROM peers WHERE group_id = ? AND git_root = ? AND status = 'active'
 `);
 
 const insertMessage = db.prepare(`
@@ -139,7 +149,7 @@ const markDelivered = db.prepare(`
 `);
 
 const countPeers = db.prepare(`
-  SELECT COUNT(*) as count FROM peers
+  SELECT COUNT(*) as count FROM peers WHERE status = 'active'
 `);
 
 // --- Stale peer cleanup ---
@@ -147,7 +157,27 @@ const countPeers = db.prepare(`
 const STALE_PEER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const deleteStalePeers = db.prepare(`
-  DELETE FROM peers WHERE last_seen < ?
+  DELETE FROM peers WHERE last_seen < ? AND (status = 'dormant' OR status = 'active')
+`);
+
+const updatePeerStatus = db.prepare(`
+  UPDATE peers SET status = ?, last_seen = ? WHERE id = ?
+`);
+
+const updatePeerId = db.prepare(`
+  UPDATE peers SET id = ? WHERE id = ?
+`);
+
+const updateMessageFromId = db.prepare(`
+  UPDATE messages SET from_id = ? WHERE from_id = ?
+`);
+
+const updateMessageToId = db.prepare(`
+  UPDATE messages SET to_id = ? WHERE to_id = ?
+`);
+
+const selectPeerByIdAndGroup = db.prepare(`
+  SELECT * FROM peers WHERE id = ? AND group_id = ?
 `);
 
 function cleanStalePeers() {
@@ -290,7 +320,50 @@ function handleSetSummary(body: SetSummaryRequest, callerPeer: Peer): { ok: bool
 
 function handleUnregister(callerPeer: Peer): void {
   wsPool.delete(callerPeer.id);
-  deletePeer.run(callerPeer.id);
+  const now = new Date().toISOString();
+  updatePeerStatus.run("dormant", now, callerPeer.id);
+}
+
+function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
+  const peer = selectPeerByToken.get(body.instance_token) as Peer | null;
+  if (!peer) {
+    return { error: "Invalid token", status: 401 };
+  }
+  // Check if there's an active WebSocket for this peer
+  if (wsPool.has(peer.id)) {
+    return { error: "Peer has active connection", status: 409 };
+  }
+  // Revive the peer
+  const now = new Date().toISOString();
+  updatePeerStatus.run("active", now, peer.id);
+  return { id: peer.id, instance_token: peer.instance_token };
+}
+
+function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { error: string; status: number } {
+  const newId = body.new_id;
+  // Validate format: 1-16 lowercase alphanumeric + hyphens
+  if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(newId)) {
+    return { error: "Invalid ID format. Must be 1-16 lowercase alphanumeric characters or hyphens, starting with alphanumeric.", status: 400 };
+  }
+  // Check uniqueness within group
+  const existing = selectPeerByIdAndGroup.get(newId, callerPeer.group_id) as Peer | null;
+  if (existing) {
+    return { error: "ID already taken", status: 409 };
+  }
+  const oldId = callerPeer.id;
+  // Update peer ID
+  updatePeerId.run(newId, oldId);
+  // Migrate messages
+  updateMessageFromId.run(newId, oldId);
+  updateMessageToId.run(newId, oldId);
+  // Update WS pool
+  const existingWs = wsPool.get(oldId);
+  if (existingWs) {
+    wsPool.delete(oldId);
+    wsPool.set(newId, existingWs);
+    existingWs.data.peerId = newId;
+  }
+  return { id: newId };
 }
 
 // --- Push undelivered messages on WebSocket connect ---
@@ -395,6 +468,15 @@ Bun.serve<WsData>({
           return Response.json(result);
         }
 
+        // /resume uses instance_token in body, not Bearer token
+        if (path === "/resume") {
+          const result = handleResume(body as ResumeRequest);
+          if ("error" in result) {
+            return Response.json({ error: result.error }, { status: result.status });
+          }
+          return Response.json(result);
+        }
+
         // All other endpoints require Bearer token
         const callerPeer = authenticateRequest(req);
         if (!callerPeer) {
@@ -411,6 +493,13 @@ Bun.serve<WsData>({
           case "/unregister":
             handleUnregister(callerPeer);
             return Response.json({ ok: true });
+          case "/set-id": {
+            const result = handleSetId(body as SetIdRequest, callerPeer);
+            if ("error" in result) {
+              return Response.json({ error: result.error }, { status: result.status });
+            }
+            return Response.json(result);
+          }
           default:
             return Response.json({ error: "not found" }, { status: 404 });
         }
