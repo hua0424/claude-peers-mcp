@@ -165,6 +165,8 @@ This instance should **not** see the `team-alpha` peers when listing.
 | `list_peers`     | Find other Claude Code instances — scoped by `group`, `directory`, or `repo`  |
 | `send_message`   | Send a message to another instance by ID (arrives instantly via WebSocket)    |
 | `set_summary`    | Describe what you're working on (visible to other peers)                      |
+| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-16 lowercase alphanumeric or hyphens, globally unique |
+| `switch_id`      | Switch to a different peer identity from a previous session                   |
 | `check_messages` | Check WebSocket connection status                                            |
 
 ## CLI
@@ -206,6 +208,14 @@ bun cli.ts kill-broker        # stop the broker (local only)
 | ---------------- | -------------------------------------- |
 | `OPENAI_API_KEY` | Enables auto-summary via gpt-5.4-nano |
 
+## Session Persistence
+
+Peer identity (ID + token) is automatically saved to `~/.claude-peers/sessions/`. When you restart Claude Code in the same directory with the same group secret, the MCP server reclaims the previous session — your peer ID stays the same.
+
+- **Custom ID:** Use `set_id` to pick a memorable name (e.g. `my-review-bot`). It persists across restarts.
+- **Switch identity:** Use `switch_id` to switch to a different previous session if the wrong one was auto-resumed.
+- **Stale cleanup:** Session files older than 7 days are automatically cleaned up.
+
 ## Auto-summary
 
 If `OPENAI_API_KEY` is set, each instance generates a brief summary on startup describing what you're likely working on (based on directory, git branch, recent files). Other instances see this when they call `list_peers`. Without it, Claude sets its own summary via `set_summary`.
@@ -238,7 +248,7 @@ All three environment variables are required: `CLAUDE_PEERS_BROKER_URL`, `CLAUDE
 
 - Verify the broker is running and reachable: `curl http://<broker-host>:7899/health?api_key=your-key`
 - Check that `CLAUDE_PEERS_API_KEY` matches between broker and client
-- If the broker was restarted, the MCP server will automatically re-register after 3 failed reconnect attempts
+- If the broker was restarted, the MCP server will first try `/resume` to reclaim the old session (preserving peer ID), then fall back to re-registering as a last resort
 
 **MCP server connected but tools not available in Claude session**
 
