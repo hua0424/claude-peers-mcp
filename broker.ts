@@ -110,6 +110,10 @@ const selectPeerById = db.prepare(`
   SELECT * FROM peers WHERE id = ?
 `);
 
+const selectPeerByHostPidGroup = db.prepare(`
+  SELECT id FROM peers WHERE hostname = ? AND pid = ? AND group_id = ?
+`);
+
 const deletePeer = db.prepare(`
   DELETE FROM peers WHERE id = ?
 `);
@@ -152,13 +156,18 @@ const markDelivered = db.prepare(`
   UPDATE messages SET delivered = 1 WHERE id = ?
 `);
 
+const deleteDeliveredMessages = db.prepare(`
+  DELETE FROM messages WHERE delivered = 1 AND sent_at < ?
+`);
+
 const countPeers = db.prepare(`
   SELECT COUNT(*) as count FROM peers WHERE status = 'active'
 `);
 
-// --- Stale peer cleanup ---
+// --- Stale data cleanup ---
 
-const STALE_PEER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const STALE_PEER_TTL_MS = 24 * 60 * 60 * 1000;         // 24 hours
+const MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 
 const deleteStalePeers = db.prepare(`
   DELETE FROM peers WHERE last_seen < ? AND (status = 'dormant' OR status = 'active')
@@ -180,16 +189,24 @@ const updateMessageToId = db.prepare(`
   UPDATE messages SET to_id = ? WHERE to_id = ?
 `);
 
-function cleanStalePeers() {
-  const cutoff = new Date(Date.now() - STALE_PEER_TTL_MS).toISOString();
-  const result = deleteStalePeers.run(cutoff);
-  if (result.changes > 0) {
-    console.error(`[claude-peers broker] Cleaned ${result.changes} stale peer(s)`);
+function cleanStale() {
+  const now = Date.now();
+
+  const peerCutoff = new Date(now - STALE_PEER_TTL_MS).toISOString();
+  const peerResult = deleteStalePeers.run(peerCutoff);
+  if (peerResult.changes > 0) {
+    console.error(`[claude-peers broker] Cleaned ${peerResult.changes} stale peer(s)`);
+  }
+
+  const msgCutoff = new Date(now - MESSAGE_RETENTION_MS).toISOString();
+  const msgResult = deleteDeliveredMessages.run(msgCutoff);
+  if (msgResult.changes > 0) {
+    console.error(`[claude-peers broker] Cleaned ${msgResult.changes} old message(s)`);
   }
 }
 
-cleanStalePeers();
-setInterval(cleanStalePeers, 60 * 60 * 1000); // every hour
+cleanStale();
+setInterval(cleanStale, 60 * 60 * 1000); // every hour
 
 // --- WebSocket connection pool ---
 
@@ -252,7 +269,15 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Group secret mismatch" };
   }
 
-  // Remove existing registration for same hostname + pid + group (re-registration)
+  // Clean up WS pool for the peer being replaced (same hostname + pid + group)
+  const oldPeer = selectPeerByHostPidGroup.get(body.hostname, body.pid, groupId) as { id: string } | null;
+  if (oldPeer) {
+    const oldWs = wsPool.get(oldPeer.id);
+    if (oldWs) {
+      oldWs.close(4000, "Peer re-registered");
+      wsPool.delete(oldPeer.id);
+    }
+  }
   deletePeerByHostPid.run(body.hostname, body.pid, groupId);
 
   const id = generatePeerId();
@@ -288,10 +313,10 @@ function handleListPeers(body: ListPeersRequest, callerPeer: Peer): PublicPeer[]
       peers = selectPeersByGroup.all(callerPeer.group_id) as Peer[];
   }
 
-  // Exclude the requesting peer and strip instance_token
+  // Exclude the requesting peer; strip internal fields (token + group_id)
   return peers
     .filter((p) => p.id !== callerPeer.id)
-    .map(({ instance_token: _tok, ...rest }) => rest);
+    .map(({ instance_token: _tok, group_id: _gid, ...rest }) => rest);
 }
 
 function handleSendMessage(
@@ -378,7 +403,8 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
     return { error: "Invalid ID format. Must be 1-32 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric.", status: 400 };
   }
   const oldId = callerPeer.id;
-  // Rely on PRIMARY KEY constraint for atomically enforced uniqueness
+  // Rely on PRIMARY KEY constraint for atomically enforced uniqueness.
+  // IDs are globally unique across all groups (not scoped per group).
   try {
     db.transaction(() => {
       updatePeerId.run(newId, oldId);
@@ -388,7 +414,7 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("UNIQUE constraint")) {
-      return { error: "ID already taken", status: 409 };
+      return { error: "ID already taken (IDs are globally unique across all groups)", status: 409 };
     }
     throw e;
   }
@@ -574,6 +600,11 @@ Bun.serve<WsData>({
           // Revive dormant peer on WS reconnect (no explicit /resume needed for same-process reconnect)
           if (peer.status === "dormant") {
             updatePeerStatus.run("active", new Date().toISOString(), peer.id);
+          }
+          // Close any existing connection for this peer before replacing it
+          const existingWs = wsPool.get(peer.id);
+          if (existingWs && existingWs !== ws) {
+            existingWs.close(4000, "Replaced by new connection");
           }
           wsPool.set(peer.id, ws);
           // Confirm authentication to client

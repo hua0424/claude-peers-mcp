@@ -501,7 +501,7 @@ test("set-id changes peer ID", async () => {
   expect(data.id).toBe("my-custom-id");
 });
 
-test("set-id rejects duplicate ID in same group", async () => {
+test("set-id rejects duplicate ID (globally unique across all groups)", async () => {
   const reg1 = await fetch(`${BASE_URL}/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

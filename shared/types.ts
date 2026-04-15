@@ -78,8 +78,8 @@ export interface SetIdResponse {
   id: PeerId;
 }
 
-// Peer without sensitive fields — safe to return in list-peers
-export type PublicPeer = Omit<Peer, "instance_token">;
+// Peer without internal/sensitive fields — safe to return in list-peers
+export type PublicPeer = Omit<Peer, "instance_token" | "group_id">;
 
 // --- WebSocket message types (broker → instance) ---
 

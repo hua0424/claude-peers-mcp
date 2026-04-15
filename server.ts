@@ -53,7 +53,7 @@ const GROUP_ID = deriveGroupId(GROUP_SECRET!);
 mkdirSync(SESSION_DIR, { recursive: true });
 
 // Derive WS URL from HTTP URL
-const WS_URL = BROKER_URL.replace(/^http/, "ws");
+const WS_URL = BROKER_URL.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
 
 // --- Utility ---
 
@@ -659,13 +659,16 @@ async function main() {
   // 6. Clean up on exit
   const cleanup = async () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (ws) ws.close();
+    // Unregister first (while peer is still active), then close WS.
+    // Reversing the order would cause /unregister to fail because the WS close
+    // handler sets the peer to dormant before the HTTP call completes.
     if (myToken) {
       try {
         await brokerFetch("/unregister", {});
         log("Unregistered from broker");
       } catch { /* Best effort */ }
     }
+    if (ws) ws.close();
     process.exit(0);
   };
 

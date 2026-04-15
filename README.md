@@ -177,7 +177,7 @@ This instance should **not** see the `team-alpha` peers when listing.
 | `list_peers`     | Find other Claude Code instances — scoped by `group`, `directory`, or `repo`  |
 | `send_message`   | Send a message to another instance by ID (arrives instantly via WebSocket)    |
 | `set_summary`    | Describe what you're working on (visible to other peers)                      |
-| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-32 lowercase alphanumeric or hyphens, globally unique |
+| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-32 lowercase alphanumeric or hyphens, globally unique across all groups |
 | `switch_id`      | Switch to a different peer identity from a previous session                   |
 | `check_messages` | Check WebSocket connection status                                            |
 
@@ -224,7 +224,7 @@ bun cli.ts kill-broker        # stop the broker (local only)
 
 Peer identity (ID + token) is automatically saved to `~/.claude-peers/sessions/`. When you restart Claude Code in the same directory with the same group secret, the MCP server reclaims the previous session — your peer ID stays the same.
 
-- **Custom ID:** Use `set_id` to assign a memorable, stable name to your instance (e.g. `my-review-bot`). Format: 1–32 lowercase letters, digits, or hyphens. IDs are globally unique across the broker — no two active peers can share one. The custom ID persists across restarts.
+- **Custom ID:** Use `set_id` to assign a memorable, stable name to your instance (e.g. `my-review-bot`). Format: 1–32 lowercase letters, digits, or hyphens. IDs are globally unique across the entire broker — not just within your group. The custom ID persists across restarts.
 - **Switch identity:** If you run multiple Claude Code sessions in the same directory (e.g. one for coding and one for review), the MCP server auto-resumes the most recently used session. Use `switch_id` to list available sessions and switch to a different one.
 - **Stale cleanup:** Session files older than 7 days are automatically cleaned up.
 
