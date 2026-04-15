@@ -330,7 +330,7 @@ const TOOLS = [
   {
     name: "set_id",
     description:
-      "Set a custom peer ID for this session. The ID must be 1-16 lowercase alphanumeric characters or hyphens. Fails if the ID is already taken by another peer in your group.",
+      "Set a custom peer ID for this session. The ID must be 1-32 lowercase alphanumeric characters or hyphens. Fails if the ID is already taken by another peer in your group.",
     inputSchema: {
       type: "object" as const,
       properties: {

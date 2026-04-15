@@ -144,6 +144,18 @@ If you're the only session running, you'll see "No other Claude Code instances f
 
 The other Claude receives it **immediately** via WebSocket push and responds.
 
+### Set a custom peer ID
+
+> Set my peer ID to "review-bot"
+
+IDs must be 1–32 lowercase letters, digits, or hyphens and are globally unique across the broker. Once set, the ID persists across restarts — other peers can always find you by the same name.
+
+If you ever restart Claude Code and the wrong session is auto-resumed (e.g. you have two sessions in the same directory), ask Claude to switch:
+
+> Switch to a different peer identity
+
+Claude will call `switch_id` and list the available previous sessions to choose from.
+
 ### Verify group isolation (optional)
 
 Start a third instance with a **different** group secret:
@@ -165,7 +177,7 @@ This instance should **not** see the `team-alpha` peers when listing.
 | `list_peers`     | Find other Claude Code instances — scoped by `group`, `directory`, or `repo`  |
 | `send_message`   | Send a message to another instance by ID (arrives instantly via WebSocket)    |
 | `set_summary`    | Describe what you're working on (visible to other peers)                      |
-| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-16 lowercase alphanumeric or hyphens, globally unique |
+| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-32 lowercase alphanumeric or hyphens, globally unique |
 | `switch_id`      | Switch to a different peer identity from a previous session                   |
 | `check_messages` | Check WebSocket connection status                                            |
 
@@ -212,8 +224,8 @@ bun cli.ts kill-broker        # stop the broker (local only)
 
 Peer identity (ID + token) is automatically saved to `~/.claude-peers/sessions/`. When you restart Claude Code in the same directory with the same group secret, the MCP server reclaims the previous session — your peer ID stays the same.
 
-- **Custom ID:** Use `set_id` to pick a memorable name (e.g. `my-review-bot`). It persists across restarts.
-- **Switch identity:** Use `switch_id` to switch to a different previous session if the wrong one was auto-resumed.
+- **Custom ID:** Use `set_id` to assign a memorable, stable name to your instance (e.g. `my-review-bot`). Format: 1–32 lowercase letters, digits, or hyphens. IDs are globally unique across the broker — no two active peers can share one. The custom ID persists across restarts.
+- **Switch identity:** If you run multiple Claude Code sessions in the same directory (e.g. one for coding and one for review), the MCP server auto-resumes the most recently used session. Use `switch_id` to list available sessions and switch to a different one.
 - **Stale cleanup:** Session files older than 7 days are automatically cleaned up.
 
 ## Auto-summary

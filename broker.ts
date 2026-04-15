@@ -344,9 +344,9 @@ function handleResume(body: ResumeRequest & { api_key?: string }): { id: string;
 
 function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { error: string; status: number } {
   const newId = body.new_id;
-  // Validate format: 1-16 lowercase alphanumeric + hyphens
-  if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(newId)) {
-    return { error: "Invalid ID format. Must be 1-16 lowercase alphanumeric characters or hyphens, starting with alphanumeric.", status: 400 };
+  // Validate format: 1-32 lowercase alphanumeric + hyphens
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(newId)) {
+    return { error: "Invalid ID format. Must be 1-32 lowercase alphanumeric characters or hyphens, starting with alphanumeric.", status: 400 };
   }
   // Check global uniqueness (peers.id is PRIMARY KEY)
   const existing = selectPeerById.get(newId) as Peer | null;
