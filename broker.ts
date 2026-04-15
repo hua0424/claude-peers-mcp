@@ -10,6 +10,8 @@
  */
 
 import { Database } from "bun:sqlite";
+import { randomBytes } from "node:crypto";
+import type { ServerWebSocket } from "bun";
 import { hashSecret, deriveGroupId, generateToken, generatePeerId, safeEqual } from "./shared/auth.ts";
 import type {
   RegisterRequest,
@@ -20,6 +22,7 @@ import type {
   ResumeRequest,
   SetIdRequest,
   Peer,
+  PublicPeer,
   Message,
   PeerId,
   WsPushMessage,
@@ -111,8 +114,9 @@ const deletePeer = db.prepare(`
   DELETE FROM peers WHERE id = ?
 `);
 
+// Scoped by group_id to avoid deleting another group's peer if PID is reused across hosts
 const deletePeerByHostPid = db.prepare(`
-  DELETE FROM peers WHERE hostname = ? AND pid = ?
+  DELETE FROM peers WHERE hostname = ? AND pid = ? AND group_id = ?
 `);
 
 const updateSummary = db.prepare(`
@@ -176,10 +180,6 @@ const updateMessageToId = db.prepare(`
   UPDATE messages SET to_id = ? WHERE to_id = ?
 `);
 
-const selectPeerByIdAndGroup = db.prepare(`
-  SELECT * FROM peers WHERE id = ? AND group_id = ?
-`);
-
 function cleanStalePeers() {
   const cutoff = new Date(Date.now() - STALE_PEER_TTL_MS).toISOString();
   const result = deleteStalePeers.run(cutoff);
@@ -193,12 +193,18 @@ setInterval(cleanStalePeers, 60 * 60 * 1000); // every hour
 
 // --- WebSocket connection pool ---
 
-const wsPool = new Map<PeerId, any>(); // Map<PeerId, ServerWebSocket>
+type WsData = { connId: string; peerId: PeerId | null };
+const wsPool = new Map<PeerId, ServerWebSocket<WsData>>();
+// Connections waiting for auth message
+const pendingConnections = new Map<string, ReturnType<typeof setTimeout>>();
+const WS_AUTH_TIMEOUT_MS = 5000;
 
 // --- Input limits ---
 
 const MAX_MESSAGE_LENGTH = 100_000; // 100KB
 const MAX_SUMMARY_LENGTH = 1_000;   // 1KB
+const MAX_HOSTNAME_LENGTH = 256;
+const MAX_CWD_LENGTH = 4096;
 
 // --- Auth helpers ---
 
@@ -217,6 +223,23 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Invalid API key" };
   }
 
+  // Input validation
+  if (!body.hostname || body.hostname.length > MAX_HOSTNAME_LENGTH) {
+    return { error: "Invalid hostname" };
+  }
+  if (!body.cwd || body.cwd.length > MAX_CWD_LENGTH) {
+    return { error: "Invalid cwd" };
+  }
+  if (!Number.isInteger(body.pid) || body.pid < 1) {
+    return { error: "Invalid pid" };
+  }
+  if (!body.group_secret || body.group_secret.length > 256) {
+    return { error: "Invalid group_secret" };
+  }
+  if (body.summary && body.summary.length > MAX_SUMMARY_LENGTH) {
+    return { error: "Summary too long" };
+  }
+
   const groupId = deriveGroupId(body.group_secret);
   const secretHash = hashSecret(body.group_secret);
 
@@ -229,8 +252,8 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Group secret mismatch" };
   }
 
-  // Remove existing registration for same hostname + pid (re-registration)
-  deletePeerByHostPid.run(body.hostname, body.pid);
+  // Remove existing registration for same hostname + pid + group (re-registration)
+  deletePeerByHostPid.run(body.hostname, body.pid, groupId);
 
   const id = generatePeerId();
   const instanceToken = generateToken();
@@ -238,13 +261,13 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
 
   insertPeer.run(
     id, body.pid, body.hostname, body.cwd, body.git_root,
-    groupId, instanceToken, body.summary, now, now
+    groupId, instanceToken, body.summary ?? "", now, now
   );
 
   return { id, instance_token: instanceToken };
 }
 
-function handleListPeers(body: ListPeersRequest, callerPeer: Peer): Peer[] {
+function handleListPeers(body: ListPeersRequest, callerPeer: Peer): PublicPeer[] {
   let peers: Peer[];
 
   switch (body.scope) {
@@ -265,14 +288,16 @@ function handleListPeers(body: ListPeersRequest, callerPeer: Peer): Peer[] {
       peers = selectPeersByGroup.all(callerPeer.group_id) as Peer[];
   }
 
-  // Exclude the requesting peer
-  peers = peers.filter((p) => p.id !== callerPeer.id);
-
-  // Strip instance_token from response
-  return peers.map(({ instance_token, ...rest }) => rest) as unknown as Peer[];
+  // Exclude the requesting peer and strip instance_token
+  return peers
+    .filter((p) => p.id !== callerPeer.id)
+    .map(({ instance_token: _tok, ...rest }) => rest);
 }
 
-function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: boolean; error?: string } {
+function handleSendMessage(
+  body: SendMessageRequest,
+  callerPeer: Peer
+): { ok: boolean; queued?: boolean; error?: string } {
   if (body.text.length > MAX_MESSAGE_LENGTH) {
     return { ok: false, error: `Message too long (max ${MAX_MESSAGE_LENGTH} chars)` };
   }
@@ -307,6 +332,10 @@ function handleSendMessage(body: SendMessageRequest, callerPeer: Peer): { ok: bo
     }
   }
 
+  // Inform caller if target is offline (message is queued for delivery on reconnect)
+  if (target.status === "dormant") {
+    return { ok: true, queued: true };
+  }
   return { ok: true };
 }
 
@@ -344,22 +373,25 @@ function handleResume(body: ResumeRequest & { api_key?: string }): { id: string;
 
 function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { error: string; status: number } {
   const newId = body.new_id;
-  // Validate format: 1-32 lowercase alphanumeric + hyphens
-  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(newId)) {
-    return { error: "Invalid ID format. Must be 1-32 lowercase alphanumeric characters or hyphens, starting with alphanumeric.", status: 400 };
-  }
-  // Check global uniqueness (peers.id is PRIMARY KEY)
-  const existing = selectPeerById.get(newId) as Peer | null;
-  if (existing) {
-    return { error: "ID already taken", status: 409 };
+  // Validate format: 1-32 lowercase alphanumeric + hyphens, no trailing hyphens
+  if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(newId)) {
+    return { error: "Invalid ID format. Must be 1-32 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric.", status: 400 };
   }
   const oldId = callerPeer.id;
-  // Atomic DB update
-  db.transaction(() => {
-    updatePeerId.run(newId, oldId);
-    updateMessageFromId.run(newId, oldId);
-    updateMessageToId.run(newId, oldId);
-  })();
+  // Rely on PRIMARY KEY constraint for atomically enforced uniqueness
+  try {
+    db.transaction(() => {
+      updatePeerId.run(newId, oldId);
+      updateMessageFromId.run(newId, oldId);
+      updateMessageToId.run(newId, oldId);
+    })();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("UNIQUE constraint")) {
+      return { error: "ID already taken", status: 409 };
+    }
+    throw e;
+  }
   // Update WS pool
   const existingWs = wsPool.get(oldId);
   if (existingWs) {
@@ -372,10 +404,9 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
 
 // --- Push undelivered messages on WebSocket connect ---
 
-function pushUndeliveredMessages(peerId: PeerId, ws: any) {
+function pushUndeliveredMessages(peerId: PeerId, ws: ServerWebSocket<WsData>) {
   const messages = selectUndelivered.all(peerId) as Message[];
   for (const msg of messages) {
-    // Look up sender info
     const sender = selectPeerById.get(msg.from_id) as Peer | null;
     const pushMsg: WsPushMessage = {
       type: "message",
@@ -409,15 +440,13 @@ function authenticateRequest(req: Request): Peer | null {
   const token = extractToken(req);
   if (!token) return null;
   const peer = lookupPeerByToken(token);
-  if (peer) {
-    updateLastSeen.run(new Date().toISOString(), peer.id);
-  }
+  // Reject dormant peers — they must call /resume before using authenticated endpoints
+  if (!peer || peer.status === "dormant") return null;
+  updateLastSeen.run(new Date().toISOString(), peer.id);
   return peer;
 }
 
 // --- HTTP + WebSocket Server ---
-
-type WsData = { peerId: PeerId; groupId: string };
 
 Bun.serve<WsData>({
   port: PORT,
@@ -427,26 +456,20 @@ Bun.serve<WsData>({
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // --- WebSocket upgrade ---
+    // --- WebSocket upgrade (token sent as first message after connect) ---
     if (path === "/ws") {
-      const token = url.searchParams.get("token");
-      if (!token) {
-        return new Response("Missing token", { status: 401 });
-      }
-      const peer = lookupPeerByToken(token);
-      if (!peer) {
-        return new Response("Invalid token", { status: 401 });
-      }
+      const connId = randomBytes(8).toString("hex");
       const upgraded = server.upgrade(req, {
-        data: { peerId: peer.id, groupId: peer.group_id },
+        data: { connId, peerId: null },
       });
       if (upgraded) return undefined;
       return new Response("WebSocket upgrade failed", { status: 500 });
     }
 
-    // --- Health endpoint (GET, requires api_key query param) ---
+    // --- Health endpoint (GET, requires Authorization: Bearer header) ---
     if (path === "/health") {
-      const apiKey = url.searchParams.get("api_key");
+      const authHeader = req.headers.get("Authorization");
+      const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
       if (!apiKey || !verifyApiKey(apiKey)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
@@ -481,7 +504,7 @@ Bun.serve<WsData>({
           return Response.json(result);
         }
 
-        // All other endpoints require Bearer token
+        // All other endpoints require Bearer token from an active peer
         const callerPeer = authenticateRequest(req);
         if (!callerPeer) {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -516,21 +539,73 @@ Bun.serve<WsData>({
 
   websocket: {
     open(ws) {
-      const { peerId } = ws.data;
-      wsPool.set(peerId, ws);
-      // Push any undelivered messages
-      pushUndeliveredMessages(peerId, ws);
-      console.error(`[claude-peers broker] WS connected: ${peerId}`);
+      // Require auth message within timeout
+      const timer = setTimeout(() => {
+        pendingConnections.delete(ws.data.connId);
+        if (ws.data.peerId === null) {
+          ws.close(4001, "Auth timeout");
+        }
+      }, WS_AUTH_TIMEOUT_MS);
+      pendingConnections.set(ws.data.connId, timer);
     },
-    message(_ws, _message) {
-      // Client→broker messages not used; broker pushes only
+
+    message(ws, rawData) {
+      // Auth phase: first message must be {"type":"auth","token":"..."}
+      if (ws.data.peerId === null) {
+        const text = typeof rawData === "string" ? rawData : Buffer.from(rawData as ArrayBuffer).toString();
+        try {
+          const msg = JSON.parse(text) as { type: string; token?: string };
+          if (msg.type !== "auth" || !msg.token) {
+            ws.close(4001, "Expected auth message");
+            return;
+          }
+          const peer = lookupPeerByToken(msg.token);
+          if (!peer) {
+            ws.close(4001, "Invalid token");
+            return;
+          }
+          // Clear auth timeout
+          const timer = pendingConnections.get(ws.data.connId);
+          if (timer) {
+            clearTimeout(timer);
+            pendingConnections.delete(ws.data.connId);
+          }
+          ws.data.peerId = peer.id;
+          // Revive dormant peer on WS reconnect (no explicit /resume needed for same-process reconnect)
+          if (peer.status === "dormant") {
+            updatePeerStatus.run("active", new Date().toISOString(), peer.id);
+          }
+          wsPool.set(peer.id, ws);
+          // Confirm authentication to client
+          ws.send(JSON.stringify({ type: "auth_ok", id: peer.id }));
+          // Deliver any queued messages
+          pushUndeliveredMessages(peer.id, ws);
+          console.error(`[claude-peers broker] WS authenticated: ${peer.id}`);
+        } catch {
+          ws.close(4001, "Invalid auth message");
+        }
+        return;
+      }
+      // Authenticated connections: no client→broker messages currently used
     },
+
     close(ws) {
-      const { peerId } = ws.data;
-      wsPool.delete(peerId);
-      console.error(`[claude-peers broker] WS disconnected: ${peerId}`);
+      const { connId, peerId } = ws.data;
+      // Clear pending auth timeout if still waiting
+      const timer = pendingConnections.get(connId);
+      if (timer) {
+        clearTimeout(timer);
+        pendingConnections.delete(connId);
+      }
+      if (peerId) {
+        wsPool.delete(peerId);
+        // Mark peer dormant so stale entries don't appear in list-peers
+        updatePeerStatus.run("dormant", new Date().toISOString(), peerId);
+      }
+      console.error(`[claude-peers broker] WS disconnected: ${peerId ?? "(unauthenticated)"}`);
     },
-    idleTimeout: 60,
+
+    idleTimeout: 120,
     sendPings: true,
   },
 });

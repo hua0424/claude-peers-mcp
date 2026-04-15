@@ -84,11 +84,12 @@ const cmd = process.argv[2];
 switch (cmd) {
   case "status": {
     try {
-      const health = await brokerFetch<{ status: string; peers: number }>(
-        `/health?api_key=${encodeURIComponent(API_KEY)}`,
-        undefined,
-        false
-      );
+      const res = await fetch(`${BROKER_URL}/health`, {
+        headers: { "Authorization": `Bearer ${API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const health = await res.json() as { status: string; peers: number };
       console.log(`Broker: ${health.status} (${health.peers} peer(s) registered)`);
       console.log(`URL: ${BROKER_URL}`);
     } catch {
@@ -162,11 +163,12 @@ switch (cmd) {
 
   case "kill-broker": {
     try {
-      const health = await brokerFetch<{ status: string; peers: number }>(
-        `/health?api_key=${encodeURIComponent(API_KEY)}`,
-        undefined,
-        false
-      );
+      const res = await fetch(`${BROKER_URL}/health`, {
+        headers: { "Authorization": `Bearer ${API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const health = await res.json() as { status: string; peers: number };
       console.log(`Broker has ${health.peers} peer(s). Shutting down...`);
 
       // Use the broker URL to find the process — works locally

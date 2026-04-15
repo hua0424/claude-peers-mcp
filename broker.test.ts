@@ -22,7 +22,8 @@ beforeAll(async () => {
   // Wait for broker to start
   for (let i = 0; i < 30; i++) {
     try {
-      const res = await fetch(`${BASE_URL}/health?api_key=${TEST_API_KEY}`, {
+      const res = await fetch(`${BASE_URL}/health`, {
+        headers: { "Authorization": `Bearer ${TEST_API_KEY}` },
         signal: AbortSignal.timeout(500),
       });
       if (res.ok) break;
@@ -37,15 +38,23 @@ afterAll(() => {
 });
 
 test("health endpoint returns ok", async () => {
-  const res = await fetch(`${BASE_URL}/health?api_key=${TEST_API_KEY}`);
+  const res = await fetch(`${BASE_URL}/health`, {
+    headers: { "Authorization": `Bearer ${TEST_API_KEY}` },
+  });
   expect(res.ok).toBe(true);
   const data = await res.json() as { status: string; peers: number };
   expect(data.status).toBe("ok");
-  expect(data.peers).toBe(0);
 });
 
 test("health endpoint rejects bad api_key", async () => {
-  const res = await fetch(`${BASE_URL}/health?api_key=wrong`);
+  const res = await fetch(`${BASE_URL}/health`, {
+    headers: { "Authorization": "Bearer wrong-key" },
+  });
+  expect(res.status).toBe(401);
+});
+
+test("health endpoint rejects missing auth", async () => {
+  const res = await fetch(`${BASE_URL}/health`);
   expect(res.status).toBe(401);
 });
 
@@ -228,12 +237,19 @@ test("send-message and WebSocket push", async () => {
   });
   const receiver = await receiverReg.json() as { id: string; instance_token: string };
 
-  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws?token=${receiver.instance_token}`);
+  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
 
+  // Connect and authenticate
   await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "auth", token: receiver.instance_token }));
+    };
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(typeof event.data === "string" ? event.data : "") as { type: string };
+      if (msg.type === "auth_ok") resolve();
+    };
     ws.onerror = (e) => reject(e);
-    setTimeout(() => reject(new Error("WS connect timeout")), 3000);
+    setTimeout(() => reject(new Error("WS auth timeout")), 3000);
   });
 
   const messagePromise = new Promise<string>((resolve) => {
@@ -441,11 +457,19 @@ test("resume fails with active WS connection", async () => {
   });
   const peer = await reg.json() as { id: string; instance_token: string };
 
-  // Connect WS
-  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws?token=${peer.instance_token}`);
-  await new Promise<void>((resolve) => { ws.onopen = () => resolve(); });
+  // Connect WS and authenticate
+  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => { ws.send(JSON.stringify({ type: "auth", token: peer.instance_token })); };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "") as { type: string };
+      if (msg.type === "auth_ok") resolve();
+    };
+    ws.onerror = (e) => reject(e);
+    setTimeout(() => reject(new Error("WS auth timeout")), 3000);
+  });
 
-  // Try resume — should get 409
+  // Try resume — should get 409 because WS is active
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

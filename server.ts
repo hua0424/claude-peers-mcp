@@ -150,12 +150,13 @@ let initialSummary = "";
 function connectWebSocket() {
   if (!myToken) return;
 
-  const wsUrl = `${WS_URL}/ws?token=${myToken}`;
   log(`Connecting WebSocket to ${WS_URL}/ws`);
-  ws = new WebSocket(wsUrl);
+  ws = new WebSocket(`${WS_URL}/ws`);
 
   ws.onopen = () => {
-    log("WebSocket connected");
+    // Send token as first message (keeps token out of URL / proxy logs)
+    ws!.send(JSON.stringify({ type: "auth", token: myToken }));
+    log("WebSocket connected, auth sent");
     reconnectDelay = 1000; // reset backoff on success
     wsFailCount = 0;
   };
@@ -163,7 +164,12 @@ function connectWebSocket() {
   ws.onmessage = async (event) => {
     try {
       const data = typeof event.data === "string" ? event.data : await event.data.text();
-      const msg = JSON.parse(data) as WsPushMessage;
+      const msg = JSON.parse(data) as WsPushMessage & { type: string };
+
+      if (msg.type === "auth_ok") {
+        log(`WebSocket authenticated as ${(msg as { id?: string }).id ?? myId}`);
+        return;
+      }
 
       if (msg.type === "message") {
         await mcp.notification({
@@ -423,7 +429,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
       try {
-        const result = await brokerFetch<{ ok: boolean; error?: string }>("/send-message", {
+        const result = await brokerFetch<{ ok: boolean; error?: string; queued?: boolean }>("/send-message", {
           to_id,
           text: message,
         });
@@ -431,6 +437,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           return {
             content: [{ type: "text" as const, text: `Failed to send: ${result.error}` }],
             isError: true,
+          };
+        }
+        if (result.queued) {
+          return {
+            content: [{ type: "text" as const, text: `Peer ${to_id} is offline. Message queued and will be delivered when they reconnect.` }],
           };
         }
         return {
@@ -549,7 +560,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 async function tryResumeSession(): Promise<boolean> {
   cleanupStaleSessions(SESSION_DIR, 7);
-  const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID);
+  const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID, myHostname);
 
   for (const session of sessions) {
     try {

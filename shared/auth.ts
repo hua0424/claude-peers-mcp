@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 
 export function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -21,7 +21,7 @@ export function generatePeerId(): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let id = "";
   for (let i = 0; i < 8; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
+    id += chars[randomInt(chars.length)];
   }
   return id;
 }

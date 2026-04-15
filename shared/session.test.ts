@@ -49,7 +49,7 @@ test("scanSessions filters by cwd and group_id", () => {
   saveSession(TEST_DIR, { peer_id: "c", instance_token: "t3", cwd: "/other", group_id: "g1", hostname: "h" });
   saveSession(TEST_DIR, { peer_id: "d", instance_token: "t4", cwd: "/proj", group_id: "g2", hostname: "h" });
 
-  const matches = scanSessions(TEST_DIR, "/proj", "g1");
+  const matches = scanSessions(TEST_DIR, "/proj", "g1", "h");
   const ids = matches.map((s) => s.peer_id);
   expect(ids).toContain("a");
   expect(ids).toContain("b");
@@ -66,7 +66,7 @@ test("scanSessions returns newest last_used first", () => {
 
   saveSession(TEST_DIR, { peer_id: "new", instance_token: "t2", cwd: "/p", group_id: "g", hostname: "h" });
 
-  const matches = scanSessions(TEST_DIR, "/p", "g");
+  const matches = scanSessions(TEST_DIR, "/p", "g", "h");
   expect(matches[0]!.peer_id).toBe("new");
   expect(matches[1]!.peer_id).toBe("old");
 });
