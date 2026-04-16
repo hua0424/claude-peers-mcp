@@ -37,7 +37,7 @@ export async function generateSummary(context: {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-5.4-nano",
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",

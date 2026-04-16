@@ -1,5 +1,6 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { type Subprocess } from "bun";
+import { unlinkSync } from "node:fs";
 
 const TEST_PORT = 17899;
 const TEST_DB = `/tmp/claude-peers-test-${Date.now()}.db`;
@@ -37,7 +38,7 @@ afterAll(async () => {
     broker.kill();
     await broker.exited;
   }
-  try { require("fs").unlinkSync(TEST_DB); } catch {}
+  try { unlinkSync(TEST_DB); } catch {}
 });
 
 test("health endpoint returns ok", async () => {

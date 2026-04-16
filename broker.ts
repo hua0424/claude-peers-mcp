@@ -12,7 +12,7 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import type { ServerWebSocket } from "bun";
-import { hashSecret, deriveGroupId, generateToken, generatePeerId, safeEqual } from "./shared/auth.ts";
+import { hashSecret, deriveGroupId, generateToken, generatePeerId, safeEqual, isValidPeerId } from "./shared/auth.ts";
 import type {
   RegisterRequest,
   RegisterResponse,
@@ -489,14 +489,15 @@ function handleSetSummary(body: SetSummaryRequest, callerPeer: Peer): { ok: bool
 }
 
 function handleUnregister(callerPeer: Peer): void {
-  wsPool.delete(callerPeer.instance_token);
   // Rotate token so old session files become invalid after unregistration.
   // On next startup, /resume with the old token returns 401, triggering re-registration.
+  // DB transaction runs first so the peer row is correct before we evict the WS.
   const newToken = generateToken();
   db.transaction(() => {
     updateInstanceToken.run(newToken, callerPeer.instance_token);
     updatePeerStatus.run("dormant", new Date().toISOString(), newToken);
   })();
+  wsPool.delete(callerPeer.instance_token);
 }
 
 function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
@@ -514,13 +515,20 @@ function handleResume(body: ResumeRequest): { id: string; instance_token: string
   if (peer.status === "active") {
     return { error: "Peer is already active", status: 409 };
   }
-  // Rotate token on every resume to prevent replay of stolen tokens
+  // Rotate token on every resume to prevent replay of stolen tokens.
+  // Use conditional UPDATE inside a transaction: if the old token was already rotated
+  // by a concurrent /resume request, updateInstanceToken matches 0 rows and we return 409.
   const newToken = generateToken();
   const now = new Date().toISOString();
-  db.transaction(() => {
-    updateInstanceToken.run(newToken, peer.instance_token);
+  const activated = db.transaction(() => {
+    const result = updateInstanceToken.run(newToken, peer.instance_token);
+    if (result.changes === 0) return false; // concurrent request already rotated this token
     updatePeerStatus.run("active", now, newToken);
+    return true;
   })();
+  if (!activated) {
+    return { error: "Peer is already active", status: 409 };
+  }
   // Migrate wsPool key (defensive — peer should be dormant with no active WS)
   const oldWs = wsPool.get(peer.instance_token);
   if (oldWs) {
@@ -537,7 +545,7 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
     return { error: "Missing or invalid new_id field", status: 400 };
   }
   // Validate format: 1-32 lowercase alphanumeric + hyphens, no trailing hyphens
-  if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(newId)) {
+  if (!isValidPeerId(newId)) {
     return { error: "Invalid ID format. Must be 1-32 lowercase alphanumeric characters or hyphens, starting and ending with alphanumeric.", status: 400 };
   }
   // IDs are unique within the group (UNIQUE(id, group_id) constraint).

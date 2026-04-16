@@ -105,6 +105,7 @@ async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     const err = await res.text();
@@ -574,9 +575,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
-        // Dormant current session
+        // Dormant current session and remove its stale local file
         if (myToken) {
           try { await brokerFetch("/unregister", {}); } catch (e) { log(`Failed to unregister current session: ${e instanceof Error ? e.message : String(e)}`); }
+          if (myId) deleteSession(SESSION_DIR, myId);
         }
         // Cancel any in-flight reconnect before switching identity
         if (reconnectTimer) {
@@ -610,6 +612,12 @@ async function tryResumeSession(): Promise<boolean> {
   const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID, myHostname);
 
   for (const session of sessions) {
+    // Skip sessions with malformed tokens (e.g. corrupted files) before hitting the network
+    if (!/^[0-9a-f]{64}$/.test(session.instance_token)) {
+      log(`Session ${session.peer_id} has invalid token format, removing`);
+      deleteSession(SESSION_DIR, session.peer_id);
+      continue;
+    }
     try {
       const res = await fetch(`${BROKER_URL}/resume`, {
         method: "POST",

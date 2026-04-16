@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, unlinkSync, existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
+import { isValidPeerId } from "./auth.ts";
 
 export interface SessionData {
   peer_id: string;
@@ -11,10 +12,8 @@ export interface SessionData {
   last_used?: string;
 }
 
-/** Reject peer IDs that could escape the sessions directory. Matches broker validation. */
-function isSafePeerId(peerId: string): boolean {
-  return /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(peerId);
-}
+/** Reject peer IDs that could escape the sessions directory. Delegates to shared validation. */
+const isSafePeerId = isValidPeerId;
 
 export function saveSession(dir: string, data: SessionData): void {
   if (!isSafePeerId(data.peer_id)) return;
