@@ -287,16 +287,15 @@ cleanStale();
 const cleanupInterval = setInterval(cleanStale, 60 * 60 * 1000);
 
 // Graceful shutdown
-process.on("SIGTERM", () => {
+function shutdown() {
   clearInterval(cleanupInterval);
+  for (const ws of wsPool.values()) ws.close(1001, "Broker shutting down");
+  wsPool.clear();
   db.close();
   process.exit(0);
-});
-process.on("SIGINT", () => {
-  clearInterval(cleanupInterval);
-  db.close();
-  process.exit(0);
-});
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 // --- WebSocket connection pool (keyed by instance_token) ---
 
@@ -471,8 +470,8 @@ function handleSendMessage(
     }
   }
 
-  // Inform caller if target is offline (message queued for delivery on reconnect)
-  if (target.status === "dormant") {
+  // Inform caller if message was queued rather than pushed live
+  if (!targetWs) {
     return { ok: true, queued: true };
   }
   return { ok: true };

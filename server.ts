@@ -69,9 +69,15 @@ async function getGitRoot(cwd: string): Promise<string | null> {
       stdout: "pipe",
       stderr: "ignore",
     });
-    const text = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    if (code === 0) return text.trim();
+    const result = await Promise.race([
+      (async () => {
+        const text = await new Response(proc.stdout).text();
+        const code = await proc.exited;
+        return code === 0 ? text.trim() : null;
+      })(),
+      new Promise<null>((resolve) => setTimeout(() => { proc.kill(); resolve(null); }, 5000)),
+    ]);
+    return result;
   } catch { /* not a git repo */ }
   return null;
 }
@@ -164,7 +170,7 @@ function connectWebSocket() {
 
   ws.onmessage = async (event) => {
     try {
-      const data = typeof event.data === "string" ? event.data : await event.data.text();
+      const data = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data as ArrayBuffer);
       const msg = JSON.parse(data) as WsPushMessage & { type: string };
 
       if (msg.type === "auth_ok") {
@@ -237,6 +243,9 @@ function scheduleReconnect() {
             log("Session taken by another connection, re-registering...");
             await register(initialSummary);
             wsFailCount = 0;
+          } else {
+            log(`Resume returned unexpected status ${res.status}, will retry later`);
+            return; // don't attempt WS with unknown token state
           }
         } catch (e) {
           log(`Resume/re-register failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -577,7 +586,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         myToken = resumeData.instance_token ?? targetSession.instance_token;
         saveCurrentSession();
         // Reconnect WS with new token
-        if (ws) ws.close();
+        if (ws) ws.close(1000, "Switching identity");
         connectWebSocket();
         return { content: [{ type: "text" as const, text: `Switched from ${oldId} to ${myId}` }] };
       } catch (e) {
