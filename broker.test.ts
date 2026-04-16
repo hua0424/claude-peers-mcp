@@ -579,6 +579,124 @@ test("set-id rejects duplicate ID within the same group", async () => {
   expect(setRes.status).toBe(409);
 });
 
+test("check-messages returns queued messages and marks them delivered", async () => {
+  const senderReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "checkmsg-group",
+      pid: 10001, hostname: "h", cwd: "/cs", git_root: null, summary: "sender",
+    }),
+  });
+  const sender = await senderReg.json() as { id: string; instance_token: string };
+
+  const receiverReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "checkmsg-group",
+      pid: 10002, hostname: "h", cwd: "/cr", git_root: null, summary: "receiver",
+    }),
+  });
+  const receiver = await receiverReg.json() as { id: string; instance_token: string };
+
+  // Send message while receiver has no WS (queued)
+  await fetch(`${BASE_URL}/send-message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${sender.instance_token}` },
+    body: JSON.stringify({ to_id: receiver.id, text: "queued hello" }),
+  });
+
+  // Poll — should return the queued message
+  const checkRes = await fetch(`${BASE_URL}/check-messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${receiver.instance_token}` },
+    body: JSON.stringify({}),
+  });
+  expect(checkRes.ok).toBe(true);
+  const data = await checkRes.json() as { messages: Array<{ type: string; from_id: string; text: string }> };
+  expect(data.messages).toHaveLength(1);
+  expect(data.messages[0].from_id).toBe(sender.id);
+  expect(data.messages[0].text).toBe("queued hello");
+
+  // Second poll — already delivered, should be empty
+  const checkRes2 = await fetch(`${BASE_URL}/check-messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${receiver.instance_token}` },
+    body: JSON.stringify({}),
+  });
+  const data2 = await checkRes2.json() as { messages: Array<unknown> };
+  expect(data2.messages).toHaveLength(0);
+});
+
+test("WebSocket auth timeout closes connection with code 4001", async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
+  const closeCode = await new Promise<number>((resolve, reject) => {
+    ws.onopen = () => {
+      // Do not send auth — wait for broker timeout
+    };
+    ws.onclose = (event) => resolve((event as CloseEvent).code);
+    ws.onerror = (e) => reject(e);
+    setTimeout(() => reject(new Error("test timed out waiting for auth timeout")), 8000);
+  });
+  expect(closeCode).toBe(4001);
+}, 10000);
+
+test("pushUndeliveredMessages delivers queued messages on WS auth", async () => {
+  const senderReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "push-group",
+      pid: 10011, hostname: "h", cwd: "/ps", git_root: null, summary: "sender",
+    }),
+  });
+  const sender = await senderReg.json() as { id: string; instance_token: string };
+
+  const receiverReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "push-group",
+      pid: 10012, hostname: "h", cwd: "/pr", git_root: null, summary: "receiver",
+    }),
+  });
+  const receiver = await receiverReg.json() as { id: string; instance_token: string };
+
+  // Send message while receiver has no WS (queued)
+  await fetch(`${BASE_URL}/send-message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${sender.instance_token}` },
+    body: JSON.stringify({ to_id: receiver.id, text: "pushed-offline" }),
+  });
+
+  // Connect WS — queued message should be pushed immediately after auth
+  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
+  const pushedMessages: string[] = [];
+
+  await new Promise<void>((resolve, reject) => {
+    let authOk = false;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "auth", token: receiver.instance_token }));
+    };
+    ws.onmessage = (event) => {
+      const data = typeof event.data === "string" ? event.data : "";
+      const msg = JSON.parse(data) as { type: string; text?: string };
+      if (msg.type === "auth_ok") { authOk = true; return; }
+      if (msg.type === "message" && authOk) {
+        pushedMessages.push(msg.text ?? "");
+        resolve();
+      }
+    };
+    ws.onerror = (e) => reject(e);
+    setTimeout(() => reject(new Error("push timeout")), 3000);
+  });
+
+  expect(pushedMessages).toHaveLength(1);
+  expect(pushedMessages[0]).toBe("pushed-offline");
+  ws.close();
+});
+
 test("dormant peers are excluded from list-peers", async () => {
   const reg = await fetch(`${BASE_URL}/register`, {
     method: "POST",

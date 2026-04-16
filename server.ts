@@ -158,17 +158,19 @@ function connectWebSocket() {
   if (!myToken) return;
 
   log(`Connecting WebSocket to ${WS_URL}/ws`);
-  ws = new WebSocket(`${WS_URL}/ws`);
+  // Capture in a local variable so closures don't race with the module-level `ws`
+  const socket = new WebSocket(`${WS_URL}/ws`);
+  ws = socket;
 
-  ws.onopen = () => {
+  socket.onopen = () => {
     // Send token as first message (keeps token out of URL / proxy logs)
-    ws!.send(JSON.stringify({ type: "auth", token: myToken }));
+    socket.send(JSON.stringify({ type: "auth", token: myToken }));
     log("WebSocket connected, auth sent");
     reconnectDelay = 1000; // reset backoff on success
     wsFailCount = 0;
   };
 
-  ws.onmessage = async (event) => {
+  socket.onmessage = async (event) => {
     try {
       const data = typeof event.data === "string" ? event.data : new TextDecoder().decode(event.data as ArrayBuffer);
       const msg = JSON.parse(data) as WsPushMessage & { type: string };
@@ -199,8 +201,8 @@ function connectWebSocket() {
     }
   };
 
-  ws.onclose = (event) => {
-    ws = null;
+  socket.onclose = (event) => {
+    if (ws === socket) ws = null;
     if ((event as CloseEvent).code === 1000) {
       // Intentional close (cleanup, switch_id) — caller manages reconnect
       return;
@@ -209,7 +211,7 @@ function connectWebSocket() {
     scheduleReconnect();
   };
 
-  ws.onerror = (e) => {
+  socket.onerror = (e) => {
     log(`WebSocket error: ${e}`);
   };
 }
@@ -245,17 +247,19 @@ function scheduleReconnect() {
             wsFailCount = 0;
           } else {
             log(`Resume returned unexpected status ${res.status}, will retry later`);
+            scheduleReconnect();
             return; // don't attempt WS with unknown token state
           }
         } catch (e) {
           log(`Resume/re-register failed: ${e instanceof Error ? e.message : String(e)}`);
           // Don't attempt WS connection with a potentially stale token
+          scheduleReconnect();
           return;
         }
       }
       connectWebSocket();
     } catch {
-      // onclose will schedule another retry
+      scheduleReconnect();
     }
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
@@ -572,7 +576,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         // Dormant current session
         if (myToken) {
-          try { await brokerFetch("/unregister", {}); } catch { /* best effort */ }
+          try { await brokerFetch("/unregister", {}); } catch (e) { log(`Failed to unregister current session: ${e instanceof Error ? e.message : String(e)}`); }
         }
         // Cancel any in-flight reconnect before switching identity
         if (reconnectTimer) {
@@ -711,7 +715,9 @@ async function main() {
         log("Unregistered from broker");
       } catch { /* Best effort */ }
     }
-    if (ws) ws.close();
+    const activeWs = ws;
+    ws = null;
+    if (activeWs) activeWs.close(1000);
     process.exit(0);
   };
 

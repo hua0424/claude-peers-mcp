@@ -1,5 +1,17 @@
 import { test, expect } from "bun:test";
-import { hashSecret, deriveGroupId, generateToken, generatePeerId } from "./auth.ts";
+import { hashSecret, deriveGroupId, generateToken, generatePeerId, safeEqual } from "./auth.ts";
+
+test("safeEqual returns true for identical strings", () => {
+  expect(safeEqual("my-api-key", "my-api-key")).toBe(true);
+});
+
+test("safeEqual returns false for different strings", () => {
+  expect(safeEqual("correct-key", "wrong-key")).toBe(false);
+});
+
+test("safeEqual returns false for different-length strings", () => {
+  expect(safeEqual("short", "much-longer-string")).toBe(false);
+});
 
 test("hashSecret returns consistent SHA-256 hex", () => {
   const h1 = hashSecret("my-secret");

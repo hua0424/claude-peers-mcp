@@ -666,11 +666,7 @@ Bun.serve<WsData>({
       if (!apiKey || !verifyApiKey(apiKey)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
-      setTimeout(() => {
-        clearInterval(cleanupInterval);
-        db.close();
-        process.exit(0);
-      }, 100);
+      setTimeout(shutdown, 100);
       return Response.json({ ok: true });
     }
 
@@ -713,8 +709,16 @@ Bun.serve<WsData>({
         }
 
         switch (path) {
-          case "/list-peers":
-            return Response.json(handleListPeers(body as ListPeersRequest, callerPeer));
+          case "/list-peers": {
+            const listBody = body as ListPeersRequest;
+            if (!listBody.cwd || typeof listBody.cwd !== "string" || listBody.cwd.length > MAX_CWD_LENGTH) {
+              return Response.json({ error: "Invalid cwd" }, { status: 400 });
+            }
+            if (!listBody.hostname || typeof listBody.hostname !== "string" || listBody.hostname.length > MAX_HOSTNAME_LENGTH) {
+              return Response.json({ error: "Invalid hostname" }, { status: 400 });
+            }
+            return Response.json(handleListPeers(listBody, callerPeer));
+          }
           case "/send-message":
             return Response.json(handleSendMessage(body as SendMessageRequest, callerPeer));
           case "/set-summary":
