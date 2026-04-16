@@ -21,7 +21,7 @@ export interface Message {
   to_id: PeerId;
   text: string;
   sent_at: string; // ISO timestamp
-  delivered: boolean;
+  delivered: number; // 0 | 1 in SQLite
 }
 
 // --- Broker API request/response types ---
@@ -62,6 +62,7 @@ export interface UnregisterRequest {
 }
 
 export interface ResumeRequest {
+  api_key: string;
   instance_token: string;
 }
 

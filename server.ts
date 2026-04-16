@@ -52,8 +52,9 @@ const SESSION_DIR = join(process.env.HOME ?? "/tmp", ".claude-peers", "sessions"
 const GROUP_ID = deriveGroupId(GROUP_SECRET!);
 mkdirSync(SESSION_DIR, { recursive: true });
 
-// Derive WS URL from HTTP URL
-const WS_URL = BROKER_URL.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+// Derive WS URL from HTTP URL (normalise protocol regardless of case)
+const _brokerParsed = new URL(BROKER_URL);
+const WS_URL = (_brokerParsed.protocol === "https:" ? "wss:" : "ws:") + "//" + _brokerParsed.host;
 
 // --- Utility ---
 
@@ -192,9 +193,13 @@ function connectWebSocket() {
     }
   };
 
-  ws.onclose = () => {
-    log(`WebSocket disconnected, reconnecting in ${reconnectDelay}ms`);
+  ws.onclose = (event) => {
     ws = null;
+    if ((event as CloseEvent).code === 1000) {
+      // Intentional close (cleanup, switch_id) — caller manages reconnect
+      return;
+    }
+    log(`WebSocket disconnected (code ${(event as CloseEvent).code}), reconnecting in ${reconnectDelay}ms`);
     scheduleReconnect();
   };
 
@@ -218,21 +223,25 @@ function scheduleReconnect() {
             body: JSON.stringify({ api_key: API_KEY, instance_token: myToken }),
           });
           if (res.ok) {
+            const data = await res.json() as { id: string; instance_token: string };
+            myId = data.id;
+            myToken = data.instance_token;
+            saveCurrentSession();
             log("Resume successful, reconnecting WS...");
             wsFailCount = 0;
           } else if (res.status === 401) {
             log("Token invalid, re-registering...");
             await register(initialSummary);
             wsFailCount = 0;
-          }
-          // 409 means someone else took it — re-register
-          else if (res.status === 409) {
+          } else if (res.status === 409) {
             log("Session taken by another connection, re-registering...");
             await register(initialSummary);
             wsFailCount = 0;
           }
         } catch (e) {
           log(`Resume/re-register failed: ${e instanceof Error ? e.message : String(e)}`);
+          // Don't attempt WS connection with a potentially stale token
+          return;
         }
       }
       connectWebSocket();
@@ -477,24 +486,43 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "check_messages": {
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (!myId) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "WebSocket not connected. Messages will be delivered when connection is restored.",
-            },
-          ],
+          content: [{ type: "text" as const, text: "Not registered with broker yet." }],
+          isError: true,
         };
       }
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "WebSocket is connected. Messages are delivered automatically.",
-          },
-        ],
-      };
+      try {
+        const result = await brokerFetch<{ messages: WsPushMessage[] }>("/check-messages", {});
+        if (result.messages.length === 0) {
+          const wsStatus = ws && ws.readyState === WebSocket.OPEN
+            ? "WebSocket is connected."
+            : "WebSocket is reconnecting.";
+          return {
+            content: [{ type: "text" as const, text: `No queued messages. ${wsStatus}` }],
+          };
+        }
+        for (const msg of result.messages) {
+          await mcp.notification({
+            method: "notifications/claude/channel",
+            params: {
+              content: msg.text,
+              meta: {
+                from_id: msg.from_id,
+                from_summary: msg.from_summary,
+                from_cwd: msg.from_cwd,
+                from_hostname: msg.from_hostname,
+                sent_at: msg.sent_at,
+              },
+            },
+          });
+        }
+        return {
+          content: [{ type: "text" as const, text: `Delivered ${result.messages.length} queued message(s).` }],
+        };
+      } catch (e) {
+        return friendlyError(e);
+      }
     }
 
     case "set_id": {
@@ -529,18 +557,24 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
         });
+        const resumeData = await res.json() as { id?: string; instance_token?: string; error?: string };
         if (!res.ok) {
-          const data = await res.json() as { error: string };
-          return { content: [{ type: "text" as const, text: `Cannot switch: ${data.error}` }], isError: true };
+          return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
         // Dormant current session
         if (myToken) {
           try { await brokerFetch("/unregister", {}); } catch { /* best effort */ }
         }
-        // Adopt target identity
+        // Cancel any in-flight reconnect before switching identity
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        wsFailCount = 0;
+        // Adopt target identity (use rotated token from response)
         const oldId = myId;
-        myId = targetSession.peer_id;
-        myToken = targetSession.instance_token;
+        myId = resumeData.id ?? targetSession.peer_id;
+        myToken = resumeData.instance_token ?? targetSession.instance_token;
         saveCurrentSession();
         // Reconnect WS with new token
         if (ws) ws.close();
@@ -646,7 +680,7 @@ async function main() {
           log(`Late auto-summary applied: ${initialSummary}`);
         } catch { /* Non-critical */ }
       }
-    });
+    }).catch(() => { /* Non-critical */ });
   }
 
   // 4. Connect WebSocket for message push

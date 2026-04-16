@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "claude-peers": {
+      "type": "stdio",
+      "command": "bun",
+      "args": [
+        "/home/user/claude-peers-mcp/server.ts"
+      ],
+      "env": {
+        "CLAUDE_PEERS_BROKER_URL": "http://10.0.0.5:7899",
+        "CLAUDE_PEERS_API_KEY": "your-api-key-here",
+        "CLAUDE_PEERS_GROUP_SECRET": "your-group-secret-here"
+      }
+    }
+  }
+}

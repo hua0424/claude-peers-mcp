@@ -11,9 +11,9 @@ export interface SessionData {
   last_used?: string;
 }
 
-/** Reject peer IDs that could escape the sessions directory. */
+/** Reject peer IDs that could escape the sessions directory. Matches broker validation. */
 function isSafePeerId(peerId: string): boolean {
-  return /^[a-z0-9][a-z0-9-]*$/.test(peerId) && !peerId.includes("..");
+  return /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(peerId);
 }
 
 export function saveSession(dir: string, data: SessionData): void {

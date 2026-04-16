@@ -14,11 +14,11 @@ test("hashSecret returns different hashes for different inputs", () => {
   expect(h1).not.toBe(h2);
 });
 
-test("deriveGroupId returns first 16 chars of SHA-256", () => {
+test("deriveGroupId returns first 32 chars of SHA-256", () => {
   const groupId = deriveGroupId("my-secret");
   const fullHash = hashSecret("my-secret");
-  expect(groupId).toHaveLength(16);
-  expect(groupId).toBe(fullHash.slice(0, 16));
+  expect(groupId).toHaveLength(32);
+  expect(groupId).toBe(fullHash.slice(0, 32));
 });
 
 test("generateToken returns 64-char hex string", () => {

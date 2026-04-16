@@ -13,7 +13,7 @@ export function hashSecret(secret: string): string {
 }
 
 export function deriveGroupId(secret: string): string {
-  return hashSecret(secret).slice(0, 16);
+  return hashSecret(secret).slice(0, 32);
 }
 
 export function generateToken(): string {

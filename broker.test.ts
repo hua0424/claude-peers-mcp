@@ -32,8 +32,11 @@ beforeAll(async () => {
   }
 });
 
-afterAll(() => {
-  broker.kill();
+afterAll(async () => {
+  if (broker) {
+    broker.kill();
+    await broker.exited;
+  }
   try { require("fs").unlinkSync(TEST_DB); } catch {}
 });
 
@@ -416,7 +419,7 @@ test("unregister sets peer dormant (token still valid, but excluded from list)",
   expect(ids).not.toContain(peer1.id);
 });
 
-test("resume succeeds for dormant peer", async () => {
+test("resume succeeds for dormant peer (WS disconnect)", async () => {
   // Register a peer
   const reg = await fetch(`${BASE_URL}/register`, {
     method: "POST",
@@ -428,22 +431,59 @@ test("resume succeeds for dormant peer", async () => {
   });
   const peer = await reg.json() as { id: string; instance_token: string };
 
-  // Unregister (sets dormant)
-  await fetch(`${BASE_URL}/unregister`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer.instance_token}` },
-    body: JSON.stringify({}),
+  // Connect WS and authenticate (peer is active)
+  const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws`);
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => { ws.send(JSON.stringify({ type: "auth", token: peer.instance_token })); };
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "") as { type: string };
+      if (msg.type === "auth_ok") resolve();
+    };
+    ws.onerror = (e) => reject(e);
+    setTimeout(() => reject(new Error("WS auth timeout")), 3000);
   });
 
-  // Resume
+  // Close WS from client — broker marks peer dormant but does NOT rotate token
+  ws.close();
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Resume with original token — should succeed and return a rotated token
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
   });
   expect(resumeRes.ok).toBe(true);
-  const resumed = await resumeRes.json() as { id: string };
+  const resumed = await resumeRes.json() as { id: string; instance_token: string };
   expect(resumed.id).toBe(peer.id);
+  expect(resumed.instance_token).not.toBe(peer.instance_token); // token was rotated
+});
+
+test("resume fails after explicit unregister (token rotated)", async () => {
+  const reg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "resume-unregister-group",
+      pid: 20011, hostname: "h", cwd: "/ru", git_root: null, summary: "",
+    }),
+  });
+  const peer = await reg.json() as { id: string; instance_token: string };
+
+  // Explicit unregister — sets dormant AND rotates token
+  await fetch(`${BASE_URL}/unregister`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer.instance_token}` },
+    body: JSON.stringify({}),
+  });
+
+  // Resume with old token — should fail because token was rotated on unregister
+  const resumeRes = await fetch(`${BASE_URL}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
+  });
+  expect(resumeRes.status).toBe(401);
 });
 
 test("resume fails with active WS connection", async () => {

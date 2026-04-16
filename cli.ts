@@ -163,29 +163,15 @@ switch (cmd) {
 
   case "kill-broker": {
     try {
-      const res = await fetch(`${BROKER_URL}/health`, {
+      const res = await fetch(`${BROKER_URL}/kill`, {
+        method: "POST",
         headers: { "Authorization": `Bearer ${API_KEY}` },
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) throw new Error(`${res.status}`);
-      const health = await res.json() as { status: string; peers: number };
-      console.log(`Broker has ${health.peers} peer(s). Shutting down...`);
-
-      // Use the broker URL to find the process — works locally
-      const url = new URL(BROKER_URL);
-      const port = url.port;
-      const proc = Bun.spawnSync(["lsof", "-ti", `:${port}`]);
-      const pids = new TextDecoder()
-        .decode(proc.stdout)
-        .trim()
-        .split("\n")
-        .filter((p) => p);
-      for (const pid of pids) {
-        process.kill(parseInt(pid), "SIGTERM");
-      }
       console.log("Broker stopped.");
     } catch {
-      console.log("Broker is not running (or not local).");
+      console.log("Broker is not running.");
     }
     break;
   }
