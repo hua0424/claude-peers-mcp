@@ -506,7 +506,9 @@ function handleUnregister(callerPeer: Peer): void {
     updateInstanceToken.run(newToken, callerPeer.instance_token);
     updatePeerStatus.run("dormant", new Date().toISOString(), newToken);
   })();
+  const peerWs = wsPool.get(callerPeer.instance_token);
   wsPool.delete(callerPeer.instance_token);
+  if (peerWs) peerWs.close(4000, "Peer unregistered");
 }
 
 function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
@@ -605,30 +607,35 @@ function handleCheckMessages(callerPeer: Peer): { messages: WsPushMessage[] } {
 // --- Push undelivered messages on WebSocket connect ---
 
 function pushUndeliveredMessages(peer: Peer, ws: ServerWebSocket<WsData>) {
-  const messages = selectUndelivered.all(peer.id, peer.group_id) as Message[];
-  for (const msg of messages) {
-    const sender = selectPeerByIdAndGroup.get(msg.from_id, peer.group_id) as Peer | null;
-    const pushMsg: WsPushMessage = {
-      type: "message",
-      from_id: msg.from_id,
-      from_summary: sender?.summary ?? "",
-      from_cwd: sender?.cwd ?? "",
-      from_hostname: sender?.hostname ?? "",
-      text: msg.text,
-      sent_at: msg.sent_at,
-    };
-    try {
-      ws.send(JSON.stringify(pushMsg));
-    } catch {
-      break; // WS is broken, stop attempting further pushes
+  // Wrap in a transaction so concurrent /check-messages HTTP calls cannot deliver the same
+  // messages simultaneously — both paths do SELECT + markDelivered, and without a transaction
+  // they can interleave and deliver duplicates.
+  db.transaction(() => {
+    const messages = selectUndelivered.all(peer.id, peer.group_id) as Message[];
+    for (const msg of messages) {
+      const sender = selectPeerByIdAndGroup.get(msg.from_id, peer.group_id) as Peer | null;
+      const pushMsg: WsPushMessage = {
+        type: "message",
+        from_id: msg.from_id,
+        from_summary: sender?.summary ?? "",
+        from_cwd: sender?.cwd ?? "",
+        from_hostname: sender?.hostname ?? "",
+        text: msg.text,
+        sent_at: msg.sent_at,
+      };
+      try {
+        ws.send(JSON.stringify(pushMsg));
+      } catch {
+        break; // WS is broken, stop attempting further pushes
+      }
+      try {
+        markDelivered.run(msg.id);
+      } catch (e) {
+        console.error(`[claude-peers broker] Failed to mark message ${msg.id} delivered:`, e);
+        // Continue — the message was likely received; delivery state is best-effort on WS push.
+      }
     }
-    try {
-      markDelivered.run(msg.id);
-    } catch (e) {
-      console.error(`[claude-peers broker] Failed to mark message ${msg.id} delivered:`, e);
-      // Continue — the message was likely received; delivery state is best-effort on WS push.
-    }
-  }
+  })();
 }
 
 // --- HTTP auth middleware ---

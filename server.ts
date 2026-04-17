@@ -152,13 +152,16 @@ function connectWebSocket() {
   if (!myToken) return;
 
   log(`Connecting WebSocket to ${WS_URL}/ws`);
+  // Capture token at call time so the onopen closure uses the token that was current when
+  // connectWebSocket() was called, not whatever myToken happens to be when the socket opens.
+  const tokenForAuth = myToken;
   // Capture in a local variable so closures don't race with the module-level `ws`
   const socket = new WebSocket(`${WS_URL}/ws`);
   ws = socket;
 
   socket.onopen = () => {
     // Send token as first message (keeps token out of URL / proxy logs)
-    socket.send(JSON.stringify({ type: "auth", token: myToken }));
+    socket.send(JSON.stringify({ type: "auth", token: tokenForAuth }));
     log("WebSocket connected, auth sent");
     reconnectDelay = 1000; // reset backoff on success
     wsFailCount = 0;
@@ -735,7 +738,10 @@ async function main() {
   log("MCP connected");
 
   // 6. Clean up on exit
+  let shuttingDown = false;
   const cleanup = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     // Unregister first (while peer is still active), then close WS.
     // Reversing the order would cause /unregister to fail because the WS close
