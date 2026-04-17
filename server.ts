@@ -649,7 +649,8 @@ async function tryResumeSession(): Promise<boolean> {
         continue;
       }
 
-      log(`Session ${session.peer_id} /resume returned unexpected status ${res.status}, skipping`);
+      log(`Session ${session.peer_id} /resume returned unexpected status ${res.status}, treating as unreachable`);
+      return false; // unexpected broker error — don't waste time trying remaining sessions
     } catch {
       // Broker unreachable, will fail on register too
       return false;
