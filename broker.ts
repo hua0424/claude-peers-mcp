@@ -373,7 +373,7 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Group secret mismatch", status: 401 };
   }
 
-  // Close WS and remove any existing peer with same hostname + pid + group
+  // Close WS for any existing peer with same hostname + pid + group
   const oldPeer = selectPeerByHostPidGroup.get(body.hostname, body.pid, groupId) as Peer | null;
   if (oldPeer) {
     const oldWs = wsPool.get(oldPeer.instance_token);
@@ -382,27 +382,33 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
       wsPool.delete(oldPeer.instance_token);
     }
   }
-  deletePeerByHostPid.run(body.hostname, body.pid, groupId);
 
+  // Wrap delete-old + insert-new in a transaction so a crash between them
+  // doesn't leave the old peer deleted without a replacement.
   const instanceToken = generateToken();
   const now = new Date().toISOString();
+  const gitRoot = body.git_root || null; // normalize "" to null
   let id = "";
   let inserted = false;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    id = generatePeerId();
-    try {
-      insertPeer.run(
-        instanceToken, id, body.pid, body.hostname, body.cwd, body.git_root,
-        groupId, body.summary ?? "", now, now
-      );
-      inserted = true;
-      break;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("UNIQUE constraint")) continue;
-      throw e;
+  db.transaction(() => {
+    deletePeerByHostPid.run(body.hostname, body.pid, groupId);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      id = generatePeerId();
+      try {
+        insertPeer.run(
+          instanceToken, id, body.pid, body.hostname, body.cwd, gitRoot,
+          groupId, body.summary ?? "", now, now
+        );
+        inserted = true;
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("UNIQUE constraint")) continue;
+        throw e;
+      }
     }
-  }
+  })();
   if (!inserted) {
     return { error: "Failed to generate unique peer ID, please retry", status: 500 };
   }
@@ -521,8 +527,8 @@ function handleResume(body: ResumeRequest): { id: string; instance_token: string
   if (!body.api_key || typeof body.api_key !== "string" || !verifyApiKey(body.api_key)) {
     return { error: "Invalid API key", status: 401 };
   }
-  if (!body.instance_token || typeof body.instance_token !== "string") {
-    return { error: "Missing instance_token", status: 400 };
+  if (!body.instance_token || typeof body.instance_token !== "string" || body.instance_token.length !== 64) {
+    return { error: "Missing or invalid instance_token", status: 400 };
   }
   const peer = selectPeerByToken.get(body.instance_token) as Peer | null;
   if (!peer) {
