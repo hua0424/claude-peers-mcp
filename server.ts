@@ -534,6 +534,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       if (!myId || !myToken) {
         return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
       }
+      if (!isValidPeerId(id)) {
+        return { content: [{ type: "text" as const, text: `Invalid peer ID format: "${id}"` }], isError: true };
+      }
       try {
         const result = await brokerFetch<{ id: string }>("/set-id", { new_id: id });
         if (!result.id) {
@@ -569,6 +572,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
+        // Validate before mutating any state — if we unregister the old identity first
+        // and then discover the response is malformed, myToken becomes a rotated/stale token
+        // and the server is stuck until restart.
+        if (!resumeData.id || !resumeData.instance_token) {
+          return { content: [{ type: "text" as const, text: "Broker returned invalid resume response" }], isError: true };
+        }
         // Dormant current session using the OLD identity token (myToken not yet updated).
         // If /unregister fails, the old peer remains active on the broker until either
         // the WS idle timeout (120s) or the 24-hour stale cleanup evicts it.
@@ -583,10 +592,6 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         wsFailCount = 0;
         reconnectDelay = 1000; // reset backoff for new identity
-        // Adopt target identity (rotated token from resume response is required)
-        if (!resumeData.id || !resumeData.instance_token) {
-          return { content: [{ type: "text" as const, text: "Broker returned invalid resume response" }], isError: true };
-        }
         const oldId = myId;
         myId = resumeData.id;
         myToken = resumeData.instance_token;
