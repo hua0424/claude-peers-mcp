@@ -8,6 +8,7 @@ export interface SessionData {
   cwd: string;
   group_id: string;
   hostname: string;
+  summary?: string;
   created_at?: string;
   last_used?: string;
 }

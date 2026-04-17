@@ -51,6 +51,7 @@ if (!API_KEY) {
 const db = new Database(DB_PATH);
 db.run("PRAGMA journal_mode = WAL");
 db.run("PRAGMA busy_timeout = 3000");
+db.run("PRAGMA foreign_keys = ON");
 
 db.run(`
   CREATE TABLE IF NOT EXISTS groups (
@@ -461,6 +462,7 @@ function handleSendMessage(
   // Note: send() is fire-and-forget; delivery is not confirmed at the protocol level.
   // Messages stay undelivered in DB until the client reconnects if the WS send fails.
   const targetWs = wsPool.get(target.instance_token);
+  let pushed = false;
   if (targetWs) {
     const pushMsg: WsPushMessage = {
       type: "message",
@@ -474,13 +476,14 @@ function handleSendMessage(
     try {
       targetWs.send(JSON.stringify(pushMsg));
       markDelivered.run(messageId);
+      pushed = true;
     } catch {
       // WebSocket send failed, message stays undelivered for later
     }
   }
 
   // Inform caller if message was queued rather than pushed live
-  if (!targetWs) {
+  if (!pushed) {
     return { ok: true, queued: true };
   }
   return { ok: true };

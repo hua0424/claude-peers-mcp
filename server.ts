@@ -138,6 +138,7 @@ function saveCurrentSession(): void {
     cwd: myCwd,
     group_id: GROUP_ID,
     hostname: myHostname,
+    summary: currentSummary || undefined,
   });
 }
 
@@ -650,6 +651,9 @@ async function tryResumeSession(): Promise<boolean> {
         const data = await res.json() as { id: string; instance_token: string };
         myId = data.id;
         myToken = data.instance_token;
+        // Restore the summary from the session file so forced re-registration
+        // after WS failures uses the correct summary, not the stale startup value.
+        if (session.summary) currentSummary = session.summary;
         saveCurrentSession();
         log(`Resumed session as peer ${myId}`);
         return true;
