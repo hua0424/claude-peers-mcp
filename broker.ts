@@ -29,11 +29,16 @@ import type {
 } from "./shared/types.ts";
 
 const PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
-if (isNaN(PORT)) {
-  console.error("[claude-peers broker] CLAUDE_PEERS_PORT must be a valid port number");
+if (isNaN(PORT) || PORT < 1 || PORT > 65535) {
+  console.error("[claude-peers broker] CLAUDE_PEERS_PORT must be a port number between 1 and 65535");
   process.exit(1);
 }
-const DB_PATH = process.env.CLAUDE_PEERS_DB ?? `${process.env.HOME}/.claude-peers.db`;
+const DB_PATH = process.env.CLAUDE_PEERS_DB
+  ?? (process.env.HOME ? `${process.env.HOME}/.claude-peers.db` : null);
+if (!DB_PATH) {
+  console.error("[claude-peers broker] Cannot determine DB path: set CLAUDE_PEERS_DB or HOME");
+  process.exit(1);
+}
 const API_KEY = process.env.CLAUDE_PEERS_API_KEY;
 
 if (!API_KEY) {
@@ -174,10 +179,6 @@ const selectPeerByIdAndGroup = db.prepare(`
 
 const selectPeerByHostPidGroup = db.prepare(`
   SELECT * FROM peers WHERE hostname = ? AND pid = ? AND group_id = ?
-`);
-
-const deletePeer = db.prepare(`
-  DELETE FROM peers WHERE instance_token = ?
 `);
 
 const deletePeerByHostPid = db.prepare(`
@@ -436,7 +437,7 @@ function handleSendMessage(
   body: SendMessageRequest,
   callerPeer: Peer
 ): { ok: boolean; queued?: boolean; error?: string } {
-  if (!body.to_id || typeof body.to_id !== "string") {
+  if (!body.to_id || typeof body.to_id !== "string" || !isValidPeerId(body.to_id)) {
     return { ok: false, error: "Missing or invalid to_id field" };
   }
   if (!body.text || typeof body.text !== "string") {
@@ -578,22 +579,27 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
 // --- HTTP poll for undelivered messages ---
 
 function handleCheckMessages(callerPeer: Peer): { messages: WsPushMessage[] } {
-  const rawMessages = selectUndelivered.all(callerPeer.id, callerPeer.group_id) as Message[];
-  const result: WsPushMessage[] = [];
-  for (const msg of rawMessages) {
-    const sender = selectPeerByIdAndGroup.get(msg.from_id, callerPeer.group_id) as Peer | null;
-    result.push({
-      type: "message",
-      from_id: msg.from_id,
-      from_summary: sender?.summary ?? "",
-      from_cwd: sender?.cwd ?? "",
-      from_hostname: sender?.hostname ?? "",
-      text: msg.text,
-      sent_at: msg.sent_at,
-    });
-    markDelivered.run(msg.id);
-  }
-  return { messages: result };
+  // Transaction ensures select + mark-delivered is atomic: if the process crashes
+  // between the two steps, messages remain undelivered rather than being lost.
+  const messages = db.transaction(() => {
+    const rawMessages = selectUndelivered.all(callerPeer.id, callerPeer.group_id) as Message[];
+    const result: WsPushMessage[] = [];
+    for (const msg of rawMessages) {
+      const sender = selectPeerByIdAndGroup.get(msg.from_id, callerPeer.group_id) as Peer | null;
+      result.push({
+        type: "message",
+        from_id: msg.from_id,
+        from_summary: sender?.summary ?? "",
+        from_cwd: sender?.cwd ?? "",
+        from_hostname: sender?.hostname ?? "",
+        text: msg.text,
+        sent_at: msg.sent_at,
+      });
+      markDelivered.run(msg.id);
+    }
+    return result;
+  })();
+  return { messages };
 }
 
 // --- Push undelivered messages on WebSocket connect ---
@@ -727,11 +733,17 @@ Bun.serve<WsData>({
         switch (path) {
           case "/list-peers": {
             const listBody = body as ListPeersRequest;
+            if (!listBody.scope || !["group", "directory", "repo"].includes(listBody.scope)) {
+              return Response.json({ error: "Invalid scope (must be group, directory, or repo)" }, { status: 400 });
+            }
             if (!listBody.cwd || typeof listBody.cwd !== "string" || listBody.cwd.length > MAX_CWD_LENGTH) {
               return Response.json({ error: "Invalid cwd" }, { status: 400 });
             }
             if (!listBody.hostname || typeof listBody.hostname !== "string" || listBody.hostname.length > MAX_HOSTNAME_LENGTH) {
               return Response.json({ error: "Invalid hostname" }, { status: 400 });
+            }
+            if (listBody.git_root && (typeof listBody.git_root !== "string" || listBody.git_root.length > MAX_CWD_LENGTH)) {
+              return Response.json({ error: "Invalid git_root" }, { status: 400 });
             }
             return Response.json(handleListPeers(listBody, callerPeer));
           }

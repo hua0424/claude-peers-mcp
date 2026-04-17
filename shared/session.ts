@@ -47,6 +47,8 @@ export function scanSessions(dir: string, cwd: string, groupId: string, hostname
   for (const file of files) {
     try {
       const data = JSON.parse(readFileSync(join(dir, file), "utf8")) as SessionData;
+      // Skip entries with invalid peer_id — saves/deletes would silently no-op on them
+      if (!isSafePeerId(data.peer_id)) continue;
       if (data.cwd === cwd && data.group_id === groupId && data.hostname === hostname) {
         sessions.push(data);
       }

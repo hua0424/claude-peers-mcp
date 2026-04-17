@@ -569,10 +569,14 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           reconnectTimer = null;
         }
         wsFailCount = 0;
-        // Adopt target identity (use rotated token from response)
+        reconnectDelay = 1000; // reset backoff for new identity
+        // Adopt target identity (rotated token from resume response is required)
+        if (!resumeData.id || !resumeData.instance_token) {
+          return { content: [{ type: "text" as const, text: "Broker returned invalid resume response" }], isError: true };
+        }
         const oldId = myId;
-        myId = resumeData.id ?? targetSession.peer_id;
-        myToken = resumeData.instance_token ?? targetSession.instance_token;
+        myId = resumeData.id;
+        myToken = resumeData.instance_token;
         // Remove the old session file for the target identity before writing the new one,
         // so scanSessions never sees two files for the same peer on next startup.
         deleteSession(SESSION_DIR, targetSession.peer_id);
