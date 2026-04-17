@@ -535,12 +535,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
       }
       try {
-        const result = await brokerFetch<{ id?: string; error?: string }>("/set-id", { new_id: id });
-        if (result.error) {
-          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        const result = await brokerFetch<{ id: string }>("/set-id", { new_id: id });
+        if (!result.id) {
+          return { content: [{ type: "text" as const, text: "Broker returned invalid response" }], isError: true };
         }
         const oldId = myId;
-        myId = result.id!;
+        myId = result.id;
         deleteSession(SESSION_DIR, oldId);
         saveCurrentSession();
         return { content: [{ type: "text" as const, text: `ID changed from ${oldId} to ${myId}` }] };

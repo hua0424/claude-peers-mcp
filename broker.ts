@@ -218,8 +218,8 @@ const markDelivered = db.prepare(`
   UPDATE messages SET delivered = 1 WHERE id = ?
 `);
 
-const deleteDeliveredMessages = db.prepare(`
-  DELETE FROM messages WHERE delivered = 1 AND sent_at < ?
+const deleteStaleMessages = db.prepare(`
+  DELETE FROM messages WHERE sent_at < ?
 `);
 
 const countPeers = db.prepare(`
@@ -279,9 +279,9 @@ function cleanStale() {
   }
 
   const msgCutoff = new Date(now - MESSAGE_RETENTION_MS).toISOString();
-  const msgResult = deleteDeliveredMessages.run(msgCutoff);
+  const msgResult = deleteStaleMessages.run(msgCutoff);
   if (msgResult.changes > 0) {
-    console.error(`[claude-peers broker] Cleaned ${msgResult.changes} old message(s)`);
+    console.error(`[claude-peers broker] Cleaned ${msgResult.changes} old message(s) (delivered and undelivered)`);
   }
 
   // Remove groups that have no remaining peers

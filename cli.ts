@@ -63,7 +63,7 @@ async function registerCli(): Promise<void> {
       hostname: hostname(),
       cwd: process.cwd(),
       git_root: null,
-      summary: "[CLI]",
+      summary: "[CLI — temporary, will unregister on exit]",
     },
     false // don't use Bearer token for /register
   );

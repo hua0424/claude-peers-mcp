@@ -42,7 +42,7 @@ export interface RegisterResponse {
 }
 
 export interface SetSummaryRequest {
-  summary?: string;
+  summary: string;
 }
 
 export interface ListPeersRequest {
