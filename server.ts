@@ -728,7 +728,10 @@ async function main() {
           await brokerFetch("/set-summary", { summary: initialSummary });
           log(`Late auto-summary applied: ${initialSummary}`);
           // Sync currentSummary only if user hasn't called set_summary yet
-          if (!currentSummary) currentSummary = initialSummary;
+          if (!currentSummary) {
+            currentSummary = initialSummary;
+            saveCurrentSession();
+          }
         } catch { /* Non-critical */ }
       }
     }).catch(() => { /* Non-critical */ });
@@ -759,6 +762,7 @@ async function main() {
     const activeWs = ws;
     ws = null;
     if (activeWs) activeWs.close(1000);
+    try { await mcp.close(); } catch { /* Best effort */ }
     process.exit(0);
   };
 

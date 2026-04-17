@@ -134,6 +134,9 @@ db.run(`
   )
 `);
 
+// Index for efficient undelivered-message lookups (used by /check-messages and pushUndeliveredMessages)
+db.run("CREATE INDEX IF NOT EXISTS idx_messages_undelivered ON messages (to_id, group_id, delivered)");
+
 // Migration: add group_id to messages if missing
 try {
   db.run("ALTER TABLE messages ADD COLUMN group_id TEXT NOT NULL DEFAULT ''");
@@ -342,7 +345,7 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
   if (!body.cwd || typeof body.cwd !== "string" || body.cwd.length > MAX_CWD_LENGTH) {
     return { error: "Invalid cwd", status: 400 };
   }
-  if (body.git_root && (typeof body.git_root !== "string" || body.git_root.length > MAX_CWD_LENGTH)) {
+  if (body.git_root !== null && body.git_root !== undefined && (typeof body.git_root !== "string" || body.git_root.length > MAX_CWD_LENGTH)) {
     return { error: "Invalid git_root", status: 400 };
   }
   if (!Number.isInteger(body.pid) || body.pid < 1 || body.pid > 4_194_304) {
