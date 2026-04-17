@@ -53,10 +53,16 @@ const SESSION_DIR = join(process.env.HOME ?? "/tmp", ".claude-peers", "sessions"
 const GROUP_ID = deriveGroupId(GROUP_SECRET!);
 // Session files older than this are removed on startup. Should be >= broker's STALE_PEER_TTL (24h).
 const SESSION_CLEANUP_AGE_DAYS = 7;
-mkdirSync(SESSION_DIR, { recursive: true });
+mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
 
 // Derive WS URL from HTTP URL (normalise protocol regardless of case)
-const _brokerParsed = new URL(BROKER_URL);
+let _brokerParsed: URL;
+try {
+  _brokerParsed = new URL(BROKER_URL!);
+} catch {
+  console.error("[claude-peers] CLAUDE_PEERS_BROKER_URL is not a valid URL:", BROKER_URL);
+  process.exit(1);
+}
 const WS_URL = (_brokerParsed.protocol === "https:" ? "wss:" : "ws:") + "//" + _brokerParsed.host;
 
 // --- Utility ---
@@ -642,6 +648,8 @@ async function tryResumeSession(): Promise<boolean> {
         deleteSession(SESSION_DIR, session.peer_id);
         continue;
       }
+
+      log(`Session ${session.peer_id} /resume returned unexpected status ${res.status}, skipping`);
     } catch {
       // Broker unreachable, will fail on register too
       return false;

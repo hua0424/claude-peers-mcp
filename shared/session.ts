@@ -17,7 +17,7 @@ const isSafePeerId = isValidPeerId;
 
 export function saveSession(dir: string, data: SessionData): void {
   if (!isSafePeerId(data.peer_id)) return;
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const record = {
     ...data,

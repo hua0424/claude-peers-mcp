@@ -330,7 +330,7 @@ function lookupPeerByToken(token: string): Peer | null {
 // --- Request handlers ---
 
 function handleRegister(body: RegisterRequest): RegisterResponse | { error: string; status: number } {
-  if (!verifyApiKey(body.api_key)) {
+  if (!body.api_key || typeof body.api_key !== "string" || !verifyApiKey(body.api_key)) {
     return { error: "Invalid API key", status: 401 };
   }
 
@@ -796,7 +796,7 @@ Bun.serve<WsData>({
         const text = typeof rawData === "string" ? rawData : Buffer.from(rawData as ArrayBuffer).toString();
         try {
           const msg = JSON.parse(text) as { type: string; token?: string };
-          if (msg.type !== "auth" || !msg.token) {
+          if (msg.type !== "auth" || typeof msg.token !== "string" || !msg.token) {
             ws.close(4001, "Expected auth message");
             return;
           }
