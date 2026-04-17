@@ -29,6 +29,10 @@ import type {
 } from "./shared/types.ts";
 
 const PORT = parseInt(process.env.CLAUDE_PEERS_PORT ?? "7899", 10);
+if (isNaN(PORT)) {
+  console.error("[claude-peers broker] CLAUDE_PEERS_PORT must be a valid port number");
+  process.exit(1);
+}
 const DB_PATH = process.env.CLAUDE_PEERS_DB ?? `${process.env.HOME}/.claude-peers.db`;
 const API_KEY = process.env.CLAUDE_PEERS_API_KEY;
 
@@ -330,22 +334,22 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
   }
 
   // Input validation
-  if (!body.hostname || body.hostname.length > MAX_HOSTNAME_LENGTH) {
+  if (!body.hostname || typeof body.hostname !== "string" || body.hostname.length > MAX_HOSTNAME_LENGTH) {
     return { error: "Invalid hostname", status: 400 };
   }
-  if (!body.cwd || body.cwd.length > MAX_CWD_LENGTH) {
+  if (!body.cwd || typeof body.cwd !== "string" || body.cwd.length > MAX_CWD_LENGTH) {
     return { error: "Invalid cwd", status: 400 };
   }
-  if (body.git_root && body.git_root.length > MAX_CWD_LENGTH) {
+  if (body.git_root && (typeof body.git_root !== "string" || body.git_root.length > MAX_CWD_LENGTH)) {
     return { error: "Invalid git_root", status: 400 };
   }
-  if (!Number.isInteger(body.pid) || body.pid < 1) {
+  if (!Number.isInteger(body.pid) || body.pid < 1 || body.pid > 4_194_304) {
     return { error: "Invalid pid", status: 400 };
   }
-  if (!body.group_secret || body.group_secret.length > 256) {
+  if (!body.group_secret || typeof body.group_secret !== "string" || body.group_secret.length > 256) {
     return { error: "Invalid group_secret", status: 400 };
   }
-  if (body.summary && body.summary.length > MAX_SUMMARY_LENGTH) {
+  if (body.summary && (typeof body.summary !== "string" || body.summary.length > MAX_SUMMARY_LENGTH)) {
     return { error: "Summary too long", status: 400 };
   }
 
@@ -357,6 +361,10 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
   if (!existingGroup) {
     insertGroup.run(groupId, secretHash, new Date().toISOString());
   } else if (!safeEqual(existingGroup.group_secret_hash, secretHash)) {
+    // Defends against the astronomically unlikely case where two different secrets share
+    // the same 32-char SHA-256 prefix (i.e., a group_id collision). This is not an
+    // authentication check — any caller who derived the correct group_id already knows
+    // the secret. It is purely a collision guard.
     return { error: "Group secret mismatch", status: 401 };
   }
 
@@ -501,7 +509,7 @@ function handleUnregister(callerPeer: Peer): void {
 }
 
 function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
-  if (!body.api_key || !verifyApiKey(body.api_key)) {
+  if (!body.api_key || typeof body.api_key !== "string" || !verifyApiKey(body.api_key)) {
     return { error: "Invalid API key", status: 401 };
   }
   if (!body.instance_token || typeof body.instance_token !== "string") {

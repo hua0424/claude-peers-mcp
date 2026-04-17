@@ -542,6 +542,53 @@ test("set-id changes peer ID", async () => {
   expect(data.id).toBe("my-custom-id");
 });
 
+test("set-id updates from_id on queued messages", async () => {
+  const senderReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "setid-msg-group",
+      pid: 9001, hostname: "h", cwd: "/sm", git_root: null, summary: "",
+    }),
+  });
+  const sender = await senderReg.json() as { id: string; instance_token: string };
+
+  const receiverReg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "setid-msg-group",
+      pid: 9002, hostname: "h", cwd: "/rm", git_root: null, summary: "",
+    }),
+  });
+  const receiver = await receiverReg.json() as { id: string; instance_token: string };
+
+  // Send message while receiver has no WS (queued)
+  await fetch(`${BASE_URL}/send-message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${sender.instance_token}` },
+    body: JSON.stringify({ to_id: receiver.id, text: "before rename" }),
+  });
+
+  // Rename sender
+  await fetch(`${BASE_URL}/set-id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${sender.instance_token}` },
+    body: JSON.stringify({ new_id: "renamed-sender" }),
+  });
+
+  // Poll messages as receiver — from_id should reflect the rename
+  const checkRes = await fetch(`${BASE_URL}/check-messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${receiver.instance_token}` },
+    body: JSON.stringify({}),
+  });
+  const data = await checkRes.json() as { messages: Array<{ from_id: string; text: string }> };
+  expect(data.messages).toHaveLength(1);
+  expect(data.messages[0].from_id).toBe("renamed-sender");
+  expect(data.messages[0].text).toBe("before rename");
+});
+
 test("set-id rejects duplicate ID within the same group", async () => {
   const reg1 = await fetch(`${BASE_URL}/register`, {
     method: "POST",

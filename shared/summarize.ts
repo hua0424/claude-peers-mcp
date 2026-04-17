@@ -1,8 +1,31 @@
 /**
+ * Get the git repository root for a directory.
+ */
+export async function getGitRoot(cwd: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
+      cwd,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const result = await Promise.race([
+      (async () => {
+        const text = await new Response(proc.stdout).text();
+        const code = await proc.exited;
+        return code === 0 ? text.trim() : null;
+      })(),
+      new Promise<null>((resolve) => setTimeout(() => { proc.kill(); resolve(null); }, 5000)),
+    ]);
+    return result;
+  } catch { /* not a git repo */ }
+  return null;
+}
+
+/**
  * Generate a 1-2 sentence summary of what a Claude Code instance is likely
  * working on, based on its working directory and git context.
  *
- * Uses OpenAI's gpt-5.4-nano for cheap, fast inference.
+ * Uses OpenAI's gpt-4o-mini for cheap, fast inference.
  * Requires OPENAI_API_KEY environment variable.
  * Falls back gracefully if unavailable.
  */

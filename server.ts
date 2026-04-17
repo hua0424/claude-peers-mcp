@@ -26,6 +26,7 @@ import type {
 } from "./shared/types.ts";
 import {
   generateSummary,
+  getGitRoot,
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
@@ -60,26 +61,6 @@ const WS_URL = (_brokerParsed.protocol === "https:" ? "wss:" : "ws:") + "//" + _
 
 function log(msg: string) {
   console.error(`[claude-peers] ${msg}`);
-}
-
-async function getGitRoot(cwd: string): Promise<string | null> {
-  try {
-    const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
-      cwd,
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const result = await Promise.race([
-      (async () => {
-        const text = await new Response(proc.stdout).text();
-        const code = await proc.exited;
-        return code === 0 ? text.trim() : null;
-      })(),
-      new Promise<null>((resolve) => setTimeout(() => { proc.kill(); resolve(null); }, 5000)),
-    ]);
-    return result;
-  } catch { /* not a git repo */ }
-  return null;
 }
 
 // --- Broker communication ---
@@ -219,7 +200,7 @@ function connectWebSocket() {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  wsFailCount++;
+  wsFailCount = Math.min(wsFailCount + 1, RE_REGISTER_AFTER_FAILURES + 1);
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
     try {
@@ -230,6 +211,7 @@ function scheduleReconnect() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ api_key: API_KEY, instance_token: myToken }),
+            signal: AbortSignal.timeout(10000),
           });
           if (res.ok) {
             const data = await res.json() as { id: string; instance_token: string };
@@ -570,6 +552,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
+          signal: AbortSignal.timeout(10000),
         });
         const resumeData = await res.json() as { id?: string; instance_token?: string; error?: string };
         if (!res.ok) {
@@ -590,6 +573,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const oldId = myId;
         myId = resumeData.id ?? targetSession.peer_id;
         myToken = resumeData.instance_token ?? targetSession.instance_token;
+        // Remove the old session file for the target identity before writing the new one,
+        // so scanSessions never sees two files for the same peer on next startup.
+        deleteSession(SESSION_DIR, targetSession.peer_id);
         saveCurrentSession();
         // Reconnect WS with new token
         if (ws) ws.close(1000, "Switching identity");
@@ -623,6 +609,7 @@ async function tryResumeSession(): Promise<boolean> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ api_key: API_KEY, instance_token: session.instance_token }),
+        signal: AbortSignal.timeout(10000),
       });
 
       if (res.ok) {
