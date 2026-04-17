@@ -32,7 +32,7 @@ import {
 } from "./shared/summarize.ts";
 import { hostname } from "node:os";
 import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions } from "./shared/session.ts";
-import { deriveGroupId } from "./shared/auth.ts";
+import { deriveGroupId, isValidPeerId } from "./shared/auth.ts";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 
@@ -51,6 +51,8 @@ if (!BROKER_URL || !API_KEY || !GROUP_SECRET) {
 
 const SESSION_DIR = join(process.env.HOME ?? "/tmp", ".claude-peers", "sessions");
 const GROUP_ID = deriveGroupId(GROUP_SECRET!);
+// Session files older than this are removed on startup. Should be >= broker's STALE_PEER_TTL (24h).
+const SESSION_CLEANUP_AGE_DAYS = 7;
 mkdirSync(SESSION_DIR, { recursive: true });
 
 // Derive WS URL from HTTP URL (normalise protocol regardless of case)
@@ -543,6 +545,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     case "switch_id": {
       const { id } = args as { id: string };
+      if (!isValidPeerId(id)) {
+        return { content: [{ type: "text" as const, text: `Invalid peer ID format: "${id}"` }], isError: true };
+      }
       const targetSession = loadSession(SESSION_DIR, id);
       if (!targetSession) {
         return { content: [{ type: "text" as const, text: `No local session found for peer ${id}` }], isError: true };
@@ -558,7 +563,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
-        // Dormant current session and remove its stale local file.
+        // Dormant current session using the OLD identity token (myToken not yet updated).
         // If /unregister fails, the old peer remains active on the broker until either
         // the WS idle timeout (120s) or the 24-hour stale cleanup evicts it.
         if (myToken) {
@@ -600,7 +605,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 // --- Startup ---
 
 async function tryResumeSession(): Promise<boolean> {
-  cleanupStaleSessions(SESSION_DIR, 7);
+  cleanupStaleSessions(SESSION_DIR, SESSION_CLEANUP_AGE_DAYS);
   const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID, myHostname);
 
   for (const session of sessions) {

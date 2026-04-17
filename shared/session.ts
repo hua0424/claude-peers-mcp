@@ -80,6 +80,9 @@ export function cleanupStaleSessions(dir: string, maxAgeDays: number): void {
       const data = JSON.parse(readFileSync(join(dir, file), "utf8")) as SessionData;
       const lastUsed = data.last_used ?? data.created_at ?? "";
       // ISO 8601 strings are lexicographically sortable, string comparison is correct.
+      // If both fields are absent (e.g. a very old session file), lastUsed defaults to ""
+      // which is always < any ISO cutoff, so the file is deleted. This is intentional:
+      // files without timestamps cannot be determined to be recent and are treated as stale.
       if (lastUsed < cutoff) {
         unlinkSync(join(dir, file));
       }

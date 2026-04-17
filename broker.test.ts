@@ -99,6 +99,135 @@ test("register rejects bad api_key", async () => {
   expect(res.status).toBe(401);
 });
 
+test("register rejects invalid input fields", async () => {
+  const base = { api_key: TEST_API_KEY, group_secret: "val-group", pid: 11001, hostname: "h", cwd: "/v", git_root: null, summary: "" };
+
+  // Hostname too long
+  const r1 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...base, hostname: "h".repeat(300) }),
+  });
+  expect(r1.status).toBe(400);
+
+  // pid out of range
+  const r2 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...base, pid: -1 }),
+  });
+  expect(r2.status).toBe(400);
+
+  const r3 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...base, pid: 99_999_999 }),
+  });
+  expect(r3.status).toBe(400);
+
+  // cwd too long
+  const r4 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...base, cwd: "/".repeat(5000) }),
+  });
+  expect(r4.status).toBe(400);
+});
+
+test("set-id rejects IDs that fail isValidPeerId format", async () => {
+  const reg = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "format-group",
+      pid: 11010, hostname: "h", cwd: "/f", git_root: null, summary: "",
+    }),
+  });
+  const peer = await reg.json() as { id: string; instance_token: string };
+
+  for (const badId of ["UPPERCASE", "-leading-hyphen", "trailing-hyphen-", "has space", ""]) {
+    const res = await fetch(`${BASE_URL}/set-id`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer.instance_token}` },
+      body: JSON.stringify({ new_id: badId }),
+    });
+    expect(res.status).toBe(400);
+  }
+});
+
+test("list-peers directory scope returns same-cwd peers only", async () => {
+  const secret = "dir-scope-group";
+  const regA = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11020, hostname: "dh", cwd: "/shared", git_root: null, summary: "A" }),
+  });
+  const peerA = await regA.json() as { id: string; instance_token: string };
+
+  const regB = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11021, hostname: "dh", cwd: "/shared", git_root: null, summary: "B" }),
+  });
+  const peerB = await regB.json() as { id: string; instance_token: string };
+
+  // peerC is in a different directory
+  const regC = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11022, hostname: "dh", cwd: "/other", git_root: null, summary: "C" }),
+  });
+  const peerC = await regC.json() as { id: string; instance_token: string };
+
+  const listRes = await fetch(`${BASE_URL}/list-peers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peerA.instance_token}` },
+    body: JSON.stringify({ scope: "directory", cwd: "/shared", hostname: "dh", git_root: null }),
+  });
+  expect(listRes.ok).toBe(true);
+  const peers = await listRes.json() as Array<{ id: string }>;
+  const ids = peers.map((p) => p.id);
+  expect(ids).toContain(peerB.id);
+  expect(ids).not.toContain(peerA.id); // self excluded
+  expect(ids).not.toContain(peerC.id); // different directory
+});
+
+test("list-peers repo scope returns same-git-root peers only", async () => {
+  const secret = "repo-scope-group";
+  const regA = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11030, hostname: "rh", cwd: "/repo/a", git_root: "/repo", summary: "A" }),
+  });
+  const peerA = await regA.json() as { id: string; instance_token: string };
+
+  const regB = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11031, hostname: "rh2", cwd: "/repo/b", git_root: "/repo", summary: "B" }),
+  });
+  const peerB = await regB.json() as { id: string; instance_token: string };
+
+  const regC = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: secret, pid: 11032, hostname: "rh3", cwd: "/other-repo", git_root: "/other-repo", summary: "C" }),
+  });
+  const peerC = await regC.json() as { id: string; instance_token: string };
+
+  const listRes = await fetch(`${BASE_URL}/list-peers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peerA.instance_token}` },
+    body: JSON.stringify({ scope: "repo", cwd: "/repo/a", hostname: "rh", git_root: "/repo" }),
+  });
+  expect(listRes.ok).toBe(true);
+  const peers = await listRes.json() as Array<{ id: string }>;
+  const ids = peers.map((p) => p.id);
+  expect(ids).toContain(peerB.id);
+  expect(ids).not.toContain(peerA.id);
+  expect(ids).not.toContain(peerC.id);
+});
+
 test("register creates group on first use, reuses on second", async () => {
   const reg1 = await fetch(`${BASE_URL}/register`, {
     method: "POST",
@@ -361,7 +490,7 @@ test("set-summary updates peer summary", async () => {
   expect(setRes.ok).toBe(true);
 });
 
-test("unregister sets peer dormant (token still valid, but excluded from list)", async () => {
+test("unregister sets peer dormant and rotates token (dormant peer excluded from list)", async () => {
   // Register two peers so the lister can see results
   const reg1 = await fetch(`${BASE_URL}/register`, {
     method: "POST",
@@ -404,7 +533,8 @@ test("unregister sets peer dormant (token still valid, but excluded from list)",
   });
   expect(unregRes.ok).toBe(true);
 
-  // Token still valid (dormant, not deleted)
+  // Token is rotated on unregister — the old token is now invalid.
+  // Use peer2 (still active) to verify peer1 no longer appears in list.
   const listRes = await fetch(`${BASE_URL}/list-peers`, {
     method: "POST",
     headers: {
