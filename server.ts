@@ -89,7 +89,7 @@ async function brokerFetch<T>(path: string, body: unknown): Promise<T> {
     signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
-    const err = await res.text();
+    const err = await res.text().catch(() => "(unreadable)");
     throw new Error(`Broker error (${path}): ${res.status} ${err}`);
   }
   return res.json() as Promise<T>;
@@ -558,7 +558,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
-        // Dormant current session and remove its stale local file
+        // Dormant current session and remove its stale local file.
+        // If /unregister fails, the old peer remains active on the broker until either
+        // the WS idle timeout (120s) or the 24-hour stale cleanup evicts it.
         if (myToken) {
           try { await brokerFetch("/unregister", {}); } catch (e) { log(`Failed to unregister current session: ${e instanceof Error ? e.message : String(e)}`); }
           if (myId) deleteSession(SESSION_DIR, myId);

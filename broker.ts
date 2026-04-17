@@ -619,9 +619,14 @@ function pushUndeliveredMessages(peer: Peer, ws: ServerWebSocket<WsData>) {
     };
     try {
       ws.send(JSON.stringify(pushMsg));
-      markDelivered.run(msg.id);
     } catch {
-      break; // Stop if WS is broken
+      break; // WS is broken, stop attempting further pushes
+    }
+    try {
+      markDelivered.run(msg.id);
+    } catch (e) {
+      console.error(`[claude-peers broker] Failed to mark message ${msg.id} delivered:`, e);
+      // Continue — the message was likely received; delivery state is best-effort on WS push.
     }
   }
 }
