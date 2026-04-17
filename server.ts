@@ -125,6 +125,7 @@ async function register(summary: string): Promise<void> {
   });
   myId = reg.id;
   myToken = reg.instance_token;
+  currentSummary = summary;
   saveCurrentSession();
   log(`Registered as peer ${myId}`);
 }
@@ -143,6 +144,9 @@ function saveCurrentSession(): void {
 // --- WebSocket connection ---
 
 let initialSummary = "";
+// Tracks the most recent summary (auto-generated or user-set). Used when re-registering
+// after a forced re-registration so the user's set_summary calls are not silently discarded.
+let currentSummary = "";
 
 function connectWebSocket() {
   if (!myToken) return;
@@ -230,11 +234,15 @@ function scheduleReconnect() {
             wsFailCount = 0;
           } else if (res.status === 401) {
             log("Token invalid, re-registering...");
-            await register(initialSummary);
+            const oldId401 = myId;
+            await register(currentSummary || initialSummary);
+            if (oldId401) deleteSession(SESSION_DIR, oldId401);
             wsFailCount = 0;
           } else if (res.status === 409) {
             log("Session taken by another connection, re-registering...");
-            await register(initialSummary);
+            const oldId409 = myId;
+            await register(currentSummary || initialSummary);
+            if (oldId409) deleteSession(SESSION_DIR, oldId409);
             wsFailCount = 0;
           } else {
             log(`Resume returned unexpected status ${res.status}, will retry later`);
@@ -481,6 +489,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             isError: true,
           };
         }
+        currentSummary = summary; // keep in sync so re-registration uses the latest summary
         return {
           content: [{ type: "text" as const, text: `Summary updated: "${summary}"` }],
         };
@@ -711,6 +720,8 @@ async function main() {
         try {
           await brokerFetch("/set-summary", { summary: initialSummary });
           log(`Late auto-summary applied: ${initialSummary}`);
+          // Sync currentSummary only if user hasn't called set_summary yet
+          if (!currentSummary) currentSummary = initialSummary;
         } catch { /* Non-critical */ }
       }
     }).catch(() => { /* Non-critical */ });
