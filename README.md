@@ -70,6 +70,75 @@ You should see:
 
 Make sure port 7899 is reachable from your other hosts. Note the broker host's IP address (e.g. `10.0.0.5`). For single-machine use, the IP is `127.0.0.1`.
 
+### Running the broker in the background
+
+The command above runs in the foreground — closing the terminal kills the broker. For anything beyond a quick test, run it as a background process that survives logout.
+
+**Option A: `nohup` (quick and portable)**
+
+```bash
+nohup env CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+  bun ~/claude-peers-mcp/broker.ts \
+  > ~/claude-peers.log 2>&1 &
+
+# Confirm it's running and find the PID
+pgrep -af 'bun.*broker\.ts'
+
+# Stop it later
+kill $(pgrep -f 'bun.*broker\.ts')
+
+# Or use the built-in kill endpoint (local only)
+CLAUDE_PEERS_BROKER_URL=http://127.0.0.1:7899 \
+CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+bun ~/claude-peers-mcp/cli.ts kill-broker
+```
+
+**Option B: `systemd` unit (recommended for a permanent deployment)**
+
+Create `/etc/systemd/system/claude-peers-broker.service`:
+
+```ini
+[Unit]
+Description=claude-peers broker
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/claude-peers-mcp
+Environment=CLAUDE_PEERS_API_KEY=my-secret-key-123
+# Optional overrides:
+# Environment=CLAUDE_PEERS_PORT=7899
+# Environment=CLAUDE_PEERS_DB=/home/YOUR_USER/.claude-peers.db
+ExecStart=/usr/bin/env bun /home/YOUR_USER/claude-peers-mcp/broker.ts
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `YOUR_USER` with your username and adjust the path to `bun` if it's not on the default `PATH` (`which bun` to check). Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now claude-peers-broker
+sudo systemctl status claude-peers-broker
+journalctl -u claude-peers-broker -f   # tail logs
+```
+
+**Option C: `tmux` or `screen` (interactive session you can detach)**
+
+```bash
+tmux new -d -s broker \
+  "CLAUDE_PEERS_API_KEY=my-secret-key-123 bun ~/claude-peers-mcp/broker.ts"
+
+tmux attach -t broker    # view logs
+# Ctrl-b then d to detach again
+```
+
+> **macOS note:** Use `launchd` (create a `~/Library/LaunchAgents/com.claude-peers.broker.plist` file) or Homebrew services instead of `systemd`. The `nohup` and `tmux` options work as-is.
+
 ## Step 2: Install on Each Host
 
 On every machine that will run Claude Code:
