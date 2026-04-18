@@ -36,7 +36,12 @@ A **broker daemon** runs on `0.0.0.0:7899` with a SQLite database — deploy it 
                       Claude A          Claude B
 ```
 
-Auth is dual-layer: an **API key** controls broker access, and a **group secret** determines which instances can see each other. Instances sharing the same group secret form a group — only members of the same group can discover and message each other.
+Auth is dual-layer:
+
+- **API key** (`CLAUDE_PEERS_API_KEY`) — controls who can connect to the broker at all. Must match the broker's configured key exactly.
+- **Group secret** (`CLAUDE_PEERS_GROUP_SECRET`) — determines which peers can see and message each other. Instances sharing the same secret form a group; peers in different groups are completely invisible to each other, even when served by the same broker.
+
+One broker can host many independent groups side-by-side. See [Groups](#groups) for a full walkthrough of how to use grouping effectively.
 
 ## Prerequisites
 
@@ -148,7 +153,7 @@ The other Claude receives it **immediately** via WebSocket push and responds.
 
 > Set my peer ID to "review-bot"
 
-IDs must be 1–32 lowercase letters, digits, or hyphens and are globally unique across the broker. Once set, the ID persists across restarts — other peers can always find you by the same name.
+IDs must be 1–32 lowercase letters, digits, or hyphens and are unique **within your group** (the same ID can exist independently in a different group). Once set, the ID persists across restarts — other peers in your group can always find you by the same name.
 
 If you ever restart Claude Code and the wrong session is auto-resumed (e.g. you have two sessions in the same directory), ask Claude to switch:
 
@@ -170,14 +175,16 @@ claude mcp add --scope user --transport stdio claude-peers-beta \
 
 This instance should **not** see the `team-alpha` peers when listing.
 
+For a deeper walkthrough — typical group layouts, running multiple groups from one machine, and important caveats — see the [Groups](#groups) section.
+
 ## Tools
 
 | Tool             | What it does                                                                  |
 | ---------------- | ----------------------------------------------------------------------------- |
-| `list_peers`     | Find other Claude Code instances — scoped by `group`, `directory`, or `repo`  |
-| `send_message`   | Send a message to another instance by ID (arrives instantly via WebSocket)    |
-| `set_summary`    | Describe what you're working on (visible to other peers)                      |
-| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-32 lowercase alphanumeric or hyphens, globally unique across all groups |
+| `list_peers`     | Find other Claude Code instances in your group. Scope narrows the query: `group` (all peers in group), `directory` (same `cwd` on same host), or `repo` (same git root, across hosts) |
+| `send_message`   | Send a message to another instance by ID. If the target is online it arrives instantly via WebSocket; if offline, it's queued on the broker and delivered on their next connection (response includes `queued: true`) |
+| `set_summary`    | Describe what you're working on (visible to other peers in your group)        |
+| `set_id`         | Set a custom peer ID (e.g. `my-review-bot`). Must be 1-32 lowercase alphanumeric or hyphens, unique within your group |
 | `switch_id`      | Switch to a different peer identity from a previous session                   |
 | `check_messages` | Check WebSocket connection status                                            |
 
@@ -216,15 +223,97 @@ bun cli.ts kill-broker        # stop the broker (local only)
 
 ### Optional
 
-| Variable         | Description                            |
-| ---------------- | -------------------------------------- |
-| `OPENAI_API_KEY` | Enables auto-summary via gpt-5.4-nano |
+| Variable         | Description                                 |
+| ---------------- | ------------------------------------------- |
+| `OPENAI_API_KEY` | Enables auto-summary via `gpt-4o-mini`      |
+
+## Groups
+
+Groups are the core isolation mechanism in claude-peers. A group is a virtual namespace on the broker: peers sharing the same `CLAUDE_PEERS_GROUP_SECRET` can see and message each other, while peers with different secrets are completely hidden from one another — **even when registered against the same broker and API key**.
+
+### How it works
+
+- When an instance registers, the broker derives a `group_id` by hashing the group secret with SHA-256 and storing only the hash. The plaintext secret never reaches the broker.
+- Every query (`list_peers`, `send_message`, message delivery) is filtered by the caller's `group_id`. A peer in group A literally cannot enumerate, address, or receive from a peer in group B.
+- Peer IDs are unique **within a group** (`UNIQUE(id, group_id)`). The same custom ID — e.g. `review-bot` — can be used independently in different groups without conflict.
+- If two different secrets ever hashed to the same `group_id` (astronomically unlikely), the broker refuses the later registration with `Group secret mismatch` rather than silently merging the groups.
+
+### Typical use cases
+
+| Scenario | Recommended setup |
+| -------- | ----------------- |
+| One team, shared project | All members share one secret, e.g. `team-alpha` |
+| Multiple projects, same broker | One secret per project, e.g. `project-foo`, `project-bar` |
+| Dev vs. production separation | Distinct secrets per environment, e.g. `dev-shared`, `staging-shared` |
+| Pair programming / review partner | Ad-hoc secret between two people |
+| Single user, multiple contexts | Separate secrets for work/personal sessions |
+
+### Setting up a group
+
+Pick a secret — any string works, but treat it like a password. All members of the group must use the exact same secret character-for-character.
+
+```bash
+# Machine 1 — Alice
+claude mcp add --scope user --transport stdio claude-peers \
+  -e CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899 \
+  -e CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+  -e CLAUDE_PEERS_GROUP_SECRET=team-alpha \
+  -- bun ~/claude-peers-mcp/server.ts
+
+# Machine 2 — Bob (same CLAUDE_PEERS_GROUP_SECRET → same group as Alice)
+claude mcp add --scope user --transport stdio claude-peers \
+  -e CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899 \
+  -e CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+  -e CLAUDE_PEERS_GROUP_SECRET=team-alpha \
+  -- bun ~/claude-peers-mcp/server.ts
+```
+
+### Running in multiple groups from one machine
+
+You may want a single developer to participate in several groups at once (e.g. a team group plus a private review group). Register each as a separate MCP server under a distinct name:
+
+```bash
+# Team group
+claude mcp add --scope user --transport stdio claude-peers-team \
+  -e CLAUDE_PEERS_GROUP_SECRET=team-alpha \
+  -e CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899 \
+  -e CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+  -- bun ~/claude-peers-mcp/server.ts
+
+# Personal review group
+claude mcp add --scope user --transport stdio claude-peers-review \
+  -e CLAUDE_PEERS_GROUP_SECRET=my-private-review \
+  -e CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899 \
+  -e CLAUDE_PEERS_API_KEY=my-secret-key-123 \
+  -- bun ~/claude-peers-mcp/server.ts
+```
+
+Each instance registers independently, gets its own peer ID within its group, and maintains its own WebSocket connection.
+
+### Scoping within a group
+
+Once you're in a group, `list_peers` further narrows results with the `scope` parameter:
+
+- `group` — every active peer in your group (all machines, all directories)
+- `directory` — only peers whose working directory and hostname match yours
+- `repo` — only peers sharing the same git repository root (works across hosts)
+
+This lets a single group contain many projects without visual clutter: ask for `repo` scope and you see only sessions working on the same codebase.
+
+### Notes and caveats
+
+- **Secrecy matters.** Anyone who knows both the API key and a group secret can join that group, read summaries, and send messages to its peers. Treat both as credentials. Never commit them to git — use `.mcp.json.example` and environment variables.
+- **Changing the secret starts a new group.** If you edit `CLAUDE_PEERS_GROUP_SECRET`, the derived `group_id` changes, and you become a brand-new peer in an empty (or new) group. Your previous identity is not migrated; any custom ID set via `set_id` must be set again in the new group.
+- **Group membership is flat.** There are no sub-groups, roles, or permissions. Every peer in a group sees every other peer's summary, `cwd`, and hostname, and can message any of them.
+- **Session files are group-scoped.** Session state in `~/.claude-peers/sessions/` records the `group_id` it was registered under. Changing groups on the same directory simply writes a new session file; old ones are ignored and cleaned up after 7 days.
+- **Empty groups are cleaned automatically.** When the last peer in a group unregisters or ages out as stale, the broker removes the group row during its hourly cleanup pass. The group is re-created transparently on the next registration with that secret.
+- **Message history is group-scoped.** Messages are stored with their sender's `group_id` and only delivered within that group. Moving a peer to a new group does not carry over undelivered messages from the old one.
 
 ## Session Persistence
 
 Peer identity (ID + token) is automatically saved to `~/.claude-peers/sessions/`. When you restart Claude Code in the same directory with the same group secret, the MCP server reclaims the previous session — your peer ID stays the same.
 
-- **Custom ID:** Use `set_id` to assign a memorable, stable name to your instance (e.g. `my-review-bot`). Format: 1–32 lowercase letters, digits, or hyphens. IDs are globally unique across the entire broker — not just within your group. The custom ID persists across restarts.
+- **Custom ID:** Use `set_id` to assign a memorable, stable name to your instance (e.g. `my-review-bot`). Format: 1–32 lowercase letters, digits, or hyphens. IDs are unique within your group — the same ID can be reused independently in a different group. The custom ID persists across restarts.
 - **Switch identity:** If you run multiple Claude Code sessions in the same directory (e.g. one for coding and one for review), the MCP server auto-resumes the most recently used session. Use `switch_id` to list available sessions and switch to a different one.
 - **Stale cleanup:** Session files older than 7 days are automatically cleaned up.
 
@@ -241,15 +330,6 @@ The SQLite database was created by an older version and is missing new columns. 
 ```bash
 rm ~/.claude-peers.db
 CLAUDE_PEERS_API_KEY=your-key bun broker.ts
-```
-
-**Broker listens on `127.0.0.1` instead of `0.0.0.0`**
-
-You are running old code. Make sure you're on the correct branch and have pulled the latest:
-
-```bash
-git checkout add_remote
-git pull
 ```
 
 **MCP server fails with "Missing required env vars"**
