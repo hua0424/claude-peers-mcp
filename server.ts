@@ -608,6 +608,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const oldId = myId;
         myId = resumeData.id;
         myToken = resumeData.instance_token;
+        // Restore summary from target session so forced re-registration uses
+        // the correct summary, mirroring the pattern in tryResumeSession.
+        currentSummary = targetSession.summary || "";
         // Remove the old session file for the target identity before writing the new one,
         // so scanSessions never sees two files for the same peer on next startup.
         deleteSession(SESSION_DIR, targetSession.peer_id);
