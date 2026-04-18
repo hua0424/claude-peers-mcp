@@ -1,6 +1,7 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { type Subprocess } from "bun";
 import { unlinkSync } from "node:fs";
+import { Database } from "bun:sqlite";
 
 const TEST_PORT = 17899;
 const TEST_DB = `/tmp/claude-peers-test-${Date.now()}.db`;
@@ -39,6 +40,128 @@ afterAll(async () => {
     await broker.exited;
   }
   try { unlinkSync(TEST_DB); } catch {}
+});
+
+// Helper: spawn a broker against a prepared DB, wait for /health, then kill it.
+async function spawnBrokerWithDb(dbPath: string, port: number): Promise<{ stderr: string }> {
+  const proc = Bun.spawn(["bun", "broker.ts"], {
+    env: {
+      ...process.env,
+      CLAUDE_PEERS_PORT: String(port),
+      CLAUDE_PEERS_DB: dbPath,
+      CLAUDE_PEERS_API_KEY: TEST_API_KEY,
+    },
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  let ready = false;
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        headers: { "Authorization": `Bearer ${TEST_API_KEY}` },
+        signal: AbortSignal.timeout(500),
+      });
+      if (res.ok) { ready = true; break; }
+    } catch { /* retry */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  proc.kill();
+  await proc.exited;
+  const stderr = proc.stderr ? await new Response(proc.stderr).text() : "";
+  if (!ready) throw new Error(`Broker failed to start. stderr:\n${stderr}`);
+  return { stderr };
+}
+
+test("migrates pre-v2 peers table (id PK, no instance_token) without crashing", async () => {
+  // Reproduces the real-world upgrade failure: a peers table from a very old
+  // broker version where `id` was the primary key and `instance_token` did not
+  // yet exist. The migration must recreate the table instead of crashing.
+  const dbPath = `/tmp/claude-peers-migration-ancient-${Date.now()}.db`;
+  const port = TEST_PORT + 1;
+  try {
+    const db = new Database(dbPath);
+    db.run(`
+      CREATE TABLE peers (
+        id TEXT PRIMARY KEY,
+        pid INTEGER NOT NULL,
+        hostname TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        registered_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      )
+    `);
+    db.run(`INSERT INTO peers (id, pid, hostname, cwd, summary, registered_at, last_seen)
+            VALUES ('old', 1, 'h', '/tmp', '', datetime('now'), datetime('now'))`);
+    db.close();
+
+    const { stderr } = await spawnBrokerWithDb(dbPath, port);
+    expect(stderr).toContain("predates v2 schema");
+
+    // Verify the new schema is in place: instance_token is the PK, id is not.
+    const verify = new Database(dbPath);
+    const cols = verify.query("PRAGMA table_info(peers)").all() as Array<{ name: string; pk: number }>;
+    const tokCol = cols.find((c) => c.name === "instance_token");
+    const idCol = cols.find((c) => c.name === "id");
+    verify.close();
+    expect(tokCol?.pk).toBe(1);
+    expect(idCol?.pk).toBe(0);
+  } finally {
+    try { unlinkSync(dbPath); } catch {}
+  }
+});
+
+test("migrates v1 peers table (has instance_token + group_id) and carries rows over", async () => {
+  // Intermediate schema: `id` is PK, but `instance_token` and `group_id`
+  // already exist. Data should be carried over into the v2 table.
+  const dbPath = `/tmp/claude-peers-migration-v1-${Date.now()}.db`;
+  const port = TEST_PORT + 2;
+  try {
+    const db = new Database(dbPath);
+    db.run(`
+      CREATE TABLE groups (
+        group_id TEXT PRIMARY KEY,
+        group_secret_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `);
+    // 32-char group_id to avoid triggering the v3-format cleanup migration.
+    const gid = "g".repeat(32);
+    db.run(`INSERT INTO groups VALUES (?, 'hash1', datetime('now'))`, [gid]);
+    db.run(`
+      CREATE TABLE peers (
+        id TEXT PRIMARY KEY,
+        instance_token TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        hostname TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        git_root TEXT,
+        group_id TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        registered_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      )
+    `);
+    const token = "a".repeat(64);
+    db.run(
+      `INSERT INTO peers (id, instance_token, pid, hostname, cwd, git_root, group_id, summary, registered_at, last_seen)
+       VALUES ('peer1', ?, 42, 'h1', '/tmp', NULL, ?, 's', datetime('now'), datetime('now'))`,
+      [token, gid],
+    );
+    db.close();
+
+    await spawnBrokerWithDb(dbPath, port);
+
+    const verify = new Database(dbPath);
+    const row = verify.query("SELECT id, instance_token, status FROM peers WHERE id = 'peer1'").get() as
+      | { id: string; instance_token: string; status: string } | null;
+    verify.close();
+    expect(row).not.toBeNull();
+    expect(row?.instance_token.length).toBe(64);
+    expect(row?.status).toBe("active");
+  } finally {
+    try { unlinkSync(dbPath); } catch {}
+  }
 });
 
 test("health endpoint returns ok", async () => {

@@ -81,10 +81,17 @@ db.run(`
   )
 `);
 
-// Migration: if old schema has id as PRIMARY KEY, recreate with new schema
+// Migration: if old schema has id as PRIMARY KEY, recreate with new schema.
+// Peers re-register automatically on startup, so it is safe to carry over only
+// the columns that exist in the old table — missing ones fall back to safe
+// defaults and the next registration will refresh everything anyway.
 {
   const cols = db.query("PRAGMA table_info(peers)").all() as Array<{ name: string; pk: number }>;
   if (cols.some((c) => c.name === "id" && c.pk === 1)) {
+    const oldColNames = new Set(cols.map((c) => c.name));
+    const pick = (name: string, fallback: string) =>
+      oldColNames.has(name) ? name : `${fallback} AS ${name}`;
+
     db.transaction(() => {
       db.run("ALTER TABLE peers RENAME TO _peers_old");
       db.run(`
@@ -104,11 +111,31 @@ db.run(`
           FOREIGN KEY (group_id) REFERENCES groups(group_id)
         )
       `);
-      db.run(`
-        INSERT INTO peers (instance_token, id, pid, hostname, cwd, git_root, group_id, summary, registered_at, last_seen, status)
-        SELECT instance_token, id, pid, hostname, cwd, git_root, group_id, summary, registered_at, last_seen, COALESCE(status, 'active')
-        FROM _peers_old
-      `);
+
+      // If the old table predates instance_token entirely, skip data copy —
+      // there is no way to synthesize a valid token, and peers will re-register.
+      if (oldColNames.has("instance_token") && oldColNames.has("group_id")) {
+        const selectExprs = [
+          "instance_token",
+          "id",
+          pick("pid", "0"),
+          pick("hostname", "''"),
+          pick("cwd", "''"),
+          pick("git_root", "NULL"),
+          "group_id",
+          pick("summary", "''"),
+          pick("registered_at", "datetime('now')"),
+          pick("last_seen", "datetime('now')"),
+          oldColNames.has("status") ? "COALESCE(status, 'active') AS status" : "'active' AS status",
+        ].join(", ");
+        db.run(`
+          INSERT INTO peers (instance_token, id, pid, hostname, cwd, git_root, group_id, summary, registered_at, last_seen, status)
+          SELECT ${selectExprs} FROM _peers_old
+        `);
+      } else {
+        console.error("[claude-peers broker] Old peers table predates v2 schema — dropping stale rows (peers will re-register)");
+      }
+
       db.run("DROP TABLE _peers_old");
     })();
     console.error("[claude-peers broker] Migrated peers table to v2 (group-scoped peer IDs)");
@@ -150,8 +177,9 @@ try {
   const firstGroup = db.query("SELECT group_id FROM groups LIMIT 1").get() as { group_id: string } | null;
   if (firstGroup && firstGroup.group_id.length < 32) {
     console.error("[claude-peers broker] Detected old group ID format (pre-v3). Clearing groups and peers to upgrade...");
-    db.run("DELETE FROM groups");
+    // Delete peers first: FK from peers.group_id → groups.group_id would block otherwise.
     db.run("DELETE FROM peers");
+    db.run("DELETE FROM groups");
     console.error("[claude-peers broker] Cleared. All peers will re-register automatically.");
   }
 }
