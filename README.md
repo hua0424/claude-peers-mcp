@@ -392,14 +392,23 @@ If `OPENAI_API_KEY` is set, each instance generates a brief summary on startup d
 
 ## Troubleshooting
 
-**Broker startup fails with `table peers has no column named hostname`**
+**Broker startup fails with a SQLite schema error**
 
-The SQLite database was created by an older version and is missing new columns. Delete it and restart:
+Typical messages: `no such column: instance_token`, `table peers has no column named hostname`, or `FOREIGN KEY constraint failed` during startup. These mean the on-disk database was created by an older version and the auto-migration can't reconcile it. The fastest fix is to wipe the database — peers re-register automatically, so no real state is lost:
 
 ```bash
-rm ~/.claude-peers.db
+# Stop any running broker first
+kill $(pgrep -f 'bun.*broker\.ts') 2>/dev/null
+
+# Remove DB + WAL/SHM sidecar files (path depends on your config;
+# default is ~/.claude-peers.db, or whatever CLAUDE_PEERS_DB points to)
+rm -f ~/.claude-peers.db ~/.claude-peers.db-wal ~/.claude-peers.db-shm
+
+# Restart
 CLAUDE_PEERS_API_KEY=your-key bun broker.ts
 ```
+
+If you set a custom `CLAUDE_PEERS_DB`, substitute that path. After the broker is back up, every connected MCP server will re-register on its next heartbeat — custom peer IDs set via `set_id` are preserved in the per-host session files under `~/.claude-peers/sessions/` and will be reclaimed automatically.
 
 **MCP server fails with "Missing required env vars"**
 
