@@ -1,8 +1,31 @@
 /**
+ * Get the git repository root for a directory.
+ */
+export async function getGitRoot(cwd: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
+      cwd,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const result = await Promise.race([
+      (async () => {
+        const text = await new Response(proc.stdout).text();
+        const code = await proc.exited;
+        return code === 0 ? text.trim() : null;
+      })(),
+      new Promise<null>((resolve) => setTimeout(() => { proc.kill(); resolve(null); }, 5000)),
+    ]);
+    return result;
+  } catch { /* not a git repo */ }
+  return null;
+}
+
+/**
  * Generate a 1-2 sentence summary of what a Claude Code instance is likely
  * working on, based on its working directory and git context.
  *
- * Uses OpenAI's gpt-5.4-nano for cheap, fast inference.
+ * Uses OpenAI's gpt-4o-mini for cheap, fast inference.
  * Requires OPENAI_API_KEY environment variable.
  * Falls back gracefully if unavailable.
  */
@@ -37,7 +60,7 @@ export async function generateSummary(context: {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-5.4-nano",
+        model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
@@ -78,11 +101,15 @@ export async function getGitBranch(cwd: string): Promise<string | null> {
       stdout: "pipe",
       stderr: "ignore",
     });
-    const text = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    if (code === 0) {
-      return text.trim();
-    }
+    const result = await Promise.race([
+      (async () => {
+        const text = await new Response(proc.stdout).text();
+        const code = await proc.exited;
+        return code === 0 ? text.trim() : null;
+      })(),
+      new Promise<null>((resolve) => setTimeout(() => { proc.kill(); resolve(null); }, 5000)),
+    ]);
+    return result;
   } catch {
     // not a git repo
   }
@@ -103,8 +130,14 @@ export async function getRecentFiles(
       stdout: "pipe",
       stderr: "ignore",
     });
-    const diffText = await new Response(diffProc.stdout).text();
-    await diffProc.exited;
+    const diffText = await Promise.race([
+      (async () => {
+        const text = await new Response(diffProc.stdout).text();
+        const code = await diffProc.exited;
+        return code === 0 ? text : "";
+      })(),
+      new Promise<string>((resolve) => setTimeout(() => { diffProc.kill(); resolve(""); }, 5000)),
+    ]);
 
     const files = diffText
       .trim()
@@ -124,8 +157,14 @@ export async function getRecentFiles(
         stderr: "ignore",
       }
     );
-    const logText = await new Response(logProc.stdout).text();
-    await logProc.exited;
+    const logText = await Promise.race([
+      (async () => {
+        const text = await new Response(logProc.stdout).text();
+        const code = await logProc.exited;
+        return code === 0 ? text : "";
+      })(),
+      new Promise<string>((resolve) => setTimeout(() => { logProc.kill(); resolve(""); }, 5000)),
+    ]);
 
     const logFiles = logText
       .trim()

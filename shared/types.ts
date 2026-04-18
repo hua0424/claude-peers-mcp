@@ -12,6 +12,7 @@ export interface Peer {
   summary: string;
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
+  status: "active" | "dormant";
 }
 
 export interface Message {
@@ -20,7 +21,7 @@ export interface Message {
   to_id: PeerId;
   text: string;
   sent_at: string; // ISO timestamp
-  delivered: boolean;
+  delivered: number; // 0 | 1 in SQLite
 }
 
 // --- Broker API request/response types ---
@@ -59,6 +60,27 @@ export interface SendMessageRequest {
 export interface UnregisterRequest {
   // no body needed — peer ID derived from token
 }
+
+export interface ResumeRequest {
+  api_key: string;
+  instance_token: string;
+}
+
+export interface ResumeResponse {
+  id: PeerId;
+  instance_token: string;
+}
+
+export interface SetIdRequest {
+  new_id: string;
+}
+
+export interface SetIdResponse {
+  id: PeerId;
+}
+
+// Peer without internal/sensitive fields — safe to return in list-peers
+export type PublicPeer = Omit<Peer, "instance_token" | "group_id">;
 
 // --- WebSocket message types (broker → instance) ---
 

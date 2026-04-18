@@ -14,7 +14,7 @@ Peer discovery and messaging MCP channel for Claude Code instances.
 - `server.ts` — MCP stdio server, one per Claude Code instance. Connects to remote broker via env vars, exposes tools, pushes channel notifications via WebSocket.
 - `shared/types.ts` — Shared TypeScript types for broker API.
 - `shared/auth.ts` — Hashing and token utilities for API key and group secret auth.
-- `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
+- `shared/summarize.ts` — Auto-summary generation via gpt-4o-mini.
 - `cli.ts` — CLI utility for inspecting broker state.
 
 ## Running
