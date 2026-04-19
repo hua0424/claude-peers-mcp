@@ -390,6 +390,24 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "whoami",
+    description: "Return your current peer ID, role, and summary. Use this to confirm your identity in the group.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "set_role",
+    description:
+      "Set your role in the group (e.g. 'manager', 'developer', 'tester'). " +
+      "Can only be set once per peer — once set, only a manager can change it.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        role: { type: "string" as const, description: "Your role name (e.g. 'developer')" },
+      },
+      required: ["role"],
+    },
+  },
 ];
 
 // --- Tool handlers ---
@@ -624,6 +642,38 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text" as const, text: `Switched from ${oldId} to ${myId}` }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      }
+    }
+
+    case "whoami": {
+      return {
+        content: [{
+          type: "text" as const,
+          text: [
+            `Peer ID: ${myId ?? "(not registered)"}`,
+            `Role:    ${myRole}`,
+            `Summary: ${currentSummary || "(none)"}`,
+            `CWD:     ${myCwd}`,
+            `Host:    ${myHostname}`,
+          ].join("\n"),
+        }],
+      };
+    }
+
+    case "set_role": {
+      const { role } = args as { role: string };
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-role", { role });
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        }
+        myRole = role;
+        return { content: [{ type: "text" as const, text: `Role set to: ${role}` }] };
+      } catch (e) {
+        return friendlyError(e);
       }
     }
 
