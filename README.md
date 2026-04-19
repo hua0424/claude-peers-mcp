@@ -266,11 +266,28 @@ export CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899
 export CLAUDE_PEERS_API_KEY=my-secret-key-123
 export CLAUDE_PEERS_GROUP_SECRET=team-alpha
 
+# Broker health and group overview
 bun cli.ts status            # broker status
-bun cli.ts peers             # list peers in your group
+bun cli.ts groups            # list all groups with active peer counts (API key only)
+
+# Group-scoped commands (requires CLAUDE_PEERS_GROUP_SECRET)
+bun cli.ts peers             # list peers in your group (ID, role, host, cwd)
+bun cli.ts group-doc         # print the group's shared Markdown documentation
 bun cli.ts send <id> <msg>   # send a message to a peer
-bun cli.ts kill-broker        # stop the broker (local only)
+
+# Broker control
+bun cli.ts kill-broker       # stop the broker daemon
 ```
+
+## MCP Tools (new in this version)
+
+| Tool | Description |
+|------|-------------|
+| `whoami` | Show your peer ID, role, summary, CWD |
+| `set_role` | Set your role (e.g. `developer`, `tester`, `manager`) |
+| `get_group_doc` | Fetch the group's shared Markdown doc |
+| `set_group_doc` | Publish a Markdown doc as the group doc (manager only after Phase 2) |
+| `generate_group_doc` | Generate a team-doc template from current online members |
 
 ## Configuration
 
