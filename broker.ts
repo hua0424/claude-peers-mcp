@@ -217,6 +217,14 @@ const deletePeerByHostPid = db.prepare(`
   DELETE FROM peers WHERE hostname = ? AND pid = ? AND group_id = ?
 `);
 
+const deletePeerByToken = db.prepare(`
+  DELETE FROM peers WHERE instance_token = ?
+`);
+
+const deletePeerByIdAndGroup = db.prepare(`
+  DELETE FROM peers WHERE id = ? AND group_id = ? AND status = 'dormant'
+`);
+
 const updateSummary = db.prepare(`
   UPDATE peers SET summary = ? WHERE instance_token = ?
 `);
@@ -538,14 +546,14 @@ function handleSetSummary(body: SetSummaryRequest, callerPeer: Peer): { ok: bool
 }
 
 function handleUnregister(callerPeer: Peer): void {
-  // Rotate token so old session files become invalid after unregistration.
-  // On next startup, /resume with the old token returns 401, triggering re-registration.
-  // DB transaction runs first so the peer row is correct before we evict the WS.
-  const newToken = generateToken();
-  db.transaction(() => {
-    updateInstanceToken.run(newToken, callerPeer.instance_token);
-    updatePeerStatus.run("dormant", new Date().toISOString(), newToken);
-  })();
+  // Fully remove the peer row so its ID is released for reuse by another peer
+  // in the same group. Keeping a dormant row here served no purpose: the token
+  // was rotated and discarded, so no future /resume could reactivate it, yet
+  // UNIQUE(id, group_id) kept the ID reserved until stale cleanup (24h).
+  // WS close handler also sets dormant, but that path is for unintentional
+  // disconnects where the peer still wants to /resume later. Explicit
+  // /unregister is a clean exit, so we drop the row entirely.
+  deletePeerByToken.run(callerPeer.instance_token);
   const peerWs = wsPool.get(callerPeer.instance_token);
   wsPool.delete(callerPeer.instance_token);
   if (peerWs) peerWs.close(4000, "Peer unregistered");
@@ -601,18 +609,33 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   }
   // IDs are unique within the group (UNIQUE(id, group_id) constraint).
   // Rely on the constraint for atomically enforced uniqueness — no pre-check needed.
-  try {
+  // If the conflict is with a *dormant* peer (clean /unregister now deletes outright,
+  // so this covers crash-exited peers whose WS close left them dormant without a
+  // /unregister), evict that peer and retry once. An active peer still blocks.
+  const applyRename = () =>
     db.transaction(() => {
       updatePeerId.run(newId, callerPeer.instance_token);
       updateMessageFromId.run(newId, callerPeer.id, callerPeer.group_id);
       updateMessageToId.run(newId, callerPeer.id, callerPeer.group_id);
     })();
+  try {
+    applyRename();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("UNIQUE constraint")) {
+    if (!msg.includes("UNIQUE constraint")) throw e;
+    const evicted = deletePeerByIdAndGroup.run(newId, callerPeer.group_id);
+    if (evicted.changes === 0) {
       return { error: "ID already taken in this group", status: 409 };
     }
-    throw e;
+    try {
+      applyRename();
+    } catch (e2) {
+      const msg2 = e2 instanceof Error ? e2.message : String(e2);
+      if (msg2.includes("UNIQUE constraint")) {
+        return { error: "ID already taken in this group", status: 409 };
+      }
+      throw e2;
+    }
   }
   // wsPool is keyed by instance_token — no key update needed on ID rename
   return { id: newId };
