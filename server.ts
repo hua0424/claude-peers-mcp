@@ -408,6 +408,28 @@ const TOOLS = [
       required: ["role"],
     },
   },
+  {
+    name: "get_group_doc",
+    description:
+      "Fetch the group's shared documentation (Markdown). " +
+      "Contains team roster, role responsibilities, and workflow. " +
+      "Copy into your CLAUDE.md to keep your system prompt in sync.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "set_group_doc",
+    description:
+      "Publish a Markdown document as the group's shared documentation. " +
+      "Only peers with role 'manager' can call this (Phase 2 enforcement). " +
+      "Use generate_group_doc to create a template first.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        doc: { type: "string" as const, description: "Markdown content for the group doc" },
+      },
+      required: ["doc"],
+    },
+  },
 ];
 
 // --- Tool handlers ---
@@ -672,6 +694,39 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         myRole = role;
         return { content: [{ type: "text" as const, text: `Role set to: ${role}` }] };
+      } catch (e) {
+        return friendlyError(e);
+      }
+    }
+
+    case "get_group_doc": {
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ doc: string }>("/get-group-doc", {});
+        if (!result.doc) {
+          return {
+            content: [{ type: "text" as const, text: "No group doc set yet. Call generate_group_doc to create a template, then set_group_doc to publish it." }],
+          };
+        }
+        return { content: [{ type: "text" as const, text: result.doc }] };
+      } catch (e) {
+        return friendlyError(e);
+      }
+    }
+
+    case "set_group_doc": {
+      const { doc } = args as { doc: string };
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-group-doc", { doc });
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: "Group doc updated successfully." }] };
       } catch (e) {
         return friendlyError(e);
       }
