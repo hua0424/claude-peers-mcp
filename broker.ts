@@ -149,6 +149,20 @@ try {
   // Column already exists
 }
 
+// Migration: add role column to peers if missing
+try {
+  db.run("ALTER TABLE peers ADD COLUMN role TEXT NOT NULL DEFAULT 'unknown'");
+} catch {
+  // Column already exists
+}
+
+// Migration: add doc column to groups if missing
+try {
+  db.run("ALTER TABLE groups ADD COLUMN doc TEXT NOT NULL DEFAULT ''");
+} catch {
+  // Column already exists
+}
+
 db.run(`
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -298,6 +312,30 @@ const updateMessageFromId = db.prepare(`
 
 const updateMessageToId = db.prepare(`
   UPDATE messages SET to_id = ? WHERE to_id = ? AND group_id = ?
+`);
+
+const updatePeerRole = db.prepare(`
+  UPDATE peers SET role = ? WHERE instance_token = ?
+`);
+
+const updatePeerRoleById = db.prepare(`
+  UPDATE peers SET role = ? WHERE id = ? AND group_id = ?
+`);
+
+const selectGroupDoc = db.prepare(`
+  SELECT doc FROM groups WHERE group_id = ?
+`);
+
+const updateGroupDoc = db.prepare(`
+  UPDATE groups SET doc = ? WHERE group_id = ?
+`);
+
+const selectAllGroupsWithCounts = db.prepare(`
+  SELECT g.group_id, g.created_at,
+         COUNT(CASE WHEN p.status = 'active' THEN 1 END) AS active_peers
+  FROM groups g
+  LEFT JOIN peers p ON p.group_id = g.group_id
+  GROUP BY g.group_id, g.created_at
 `);
 
 function cleanStale() {
