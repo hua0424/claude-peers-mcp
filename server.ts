@@ -74,6 +74,7 @@ function log(msg: string) {
 // --- Broker communication ---
 
 let myId: PeerId | null = null;
+let myRole: string = "unknown";
 let myToken: string | null = null;
 let myCwd = process.cwd();
 let myGitRoot: string | null = null;
@@ -125,6 +126,7 @@ async function register(summary: string): Promise<void> {
   });
   myId = reg.id;
   myToken = reg.instance_token;
+  myRole = reg.role ?? "unknown";
   currentSummary = summary;
   saveCurrentSession();
   log(`Registered as peer ${myId}`);
@@ -581,7 +583,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
           signal: AbortSignal.timeout(10000),
         });
-        const resumeData = await res.json() as { id?: string; instance_token?: string; error?: string };
+        const resumeData = await res.json() as { id?: string; instance_token?: string; role?: string; error?: string };
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
@@ -608,6 +610,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const oldId = myId;
         myId = resumeData.id;
         myToken = resumeData.instance_token;
+        myRole = resumeData.role ?? "unknown";
         // Restore summary from target session so forced re-registration uses
         // the correct summary, mirroring the pattern in tryResumeSession.
         currentSummary = targetSession.summary || "";
@@ -654,6 +657,7 @@ async function tryResumeSession(): Promise<boolean> {
         const data = await res.json() as { id: string; instance_token: string };
         myId = data.id;
         myToken = data.instance_token;
+        myRole = (data as { id: string; instance_token: string; role?: string }).role ?? "unknown";
         // Restore the summary from the session file so forced re-registration
         // after WS failures uses the correct summary, not the stale startup value.
         if (session.summary) currentSummary = session.summary;
