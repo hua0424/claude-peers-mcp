@@ -221,7 +221,7 @@ const deletePeerByToken = db.prepare(`
   DELETE FROM peers WHERE instance_token = ?
 `);
 
-const deletePeerByIdAndGroup = db.prepare(`
+const deleteDormantPeerByIdAndGroup = db.prepare(`
   DELETE FROM peers WHERE id = ? AND group_id = ? AND status = 'dormant'
 `);
 
@@ -623,7 +623,7 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (!msg.includes("UNIQUE constraint")) throw e;
-    const evicted = deletePeerByIdAndGroup.run(newId, callerPeer.group_id);
+    const evicted = deleteDormantPeerByIdAndGroup.run(newId, callerPeer.group_id);
     if (evicted.changes === 0) {
       return { error: "ID already taken in this group", status: 409 };
     }
