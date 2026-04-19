@@ -17,6 +17,8 @@ import type {
   RegisterRequest,
   RegisterResponse,
   SetSummaryRequest,
+  SetRoleRequest,
+  SetGroupDocRequest,
   ListPeersRequest,
   SendMessageRequest,
   ResumeRequest,
@@ -679,6 +681,38 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   return { id: newId };
 }
 
+function handleSetRole(
+  body: SetRoleRequest,
+  callerPeer: Peer
+): { ok: boolean; error?: string } {
+  if (!body.role || typeof body.role !== "string" || body.role.length > 64) {
+    return { ok: false, error: "Invalid role" };
+  }
+  // Phase 1: no restrictions — any peer can set their own role
+  updatePeerRole.run(body.role, callerPeer.instance_token);
+  return { ok: true };
+}
+
+function handleGetGroupDoc(callerPeer: Peer): { doc: string } {
+  const row = selectGroupDoc.get(callerPeer.group_id) as { doc: string } | null;
+  return { doc: row?.doc ?? "" };
+}
+
+function handleSetGroupDoc(
+  body: SetGroupDocRequest,
+  callerPeer: Peer
+): { ok: boolean; error?: string } {
+  if (typeof body.doc !== "string") {
+    return { ok: false, error: "Missing or invalid doc field" };
+  }
+  if (body.doc.length > 100_000) {
+    return { ok: false, error: "Doc too long (max 100KB)" };
+  }
+  // Phase 1: no role check
+  updateGroupDoc.run(body.doc, callerPeer.group_id);
+  return { ok: true };
+}
+
 // --- HTTP poll for undelivered messages ---
 
 function handleCheckMessages(callerPeer: Peer): { messages: WsPushMessage[] } {
@@ -806,6 +840,21 @@ Bun.serve<WsData>({
     }
 
     // --- POST endpoints ---
+    // /admin/groups — API key auth, no group secret required
+    if (path === "/admin/groups") {
+      const authHeader = req.headers.get("Authorization");
+      const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+      if (!apiKey || !verifyApiKey(apiKey)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      const groups = selectAllGroupsWithCounts.all() as Array<{
+        group_id: string;
+        created_at: string;
+        active_peers: number;
+      }>;
+      return Response.json(groups);
+    }
+
     if (req.method !== "POST") {
       return new Response("claude-peers broker", { status: 200 });
     }
@@ -872,6 +921,16 @@ Bun.serve<WsData>({
             if ("error" in result) {
               return Response.json({ error: result.error }, { status: result.status });
             }
+            return Response.json(result);
+          }
+          case "/set-role": {
+            const result = handleSetRole(body as SetRoleRequest, callerPeer);
+            return Response.json(result);
+          }
+          case "/get-group-doc":
+            return Response.json(handleGetGroupDoc(callerPeer));
+          case "/set-group-doc": {
+            const result = handleSetGroupDoc(body as SetGroupDocRequest, callerPeer);
             return Response.json(result);
           }
           case "/check-messages":
