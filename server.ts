@@ -22,6 +22,7 @@ import type {
   PeerId,
   Peer,
   RegisterResponse,
+  ResumeResponse,
   WsPushMessage,
 } from "./shared/types.ts";
 import {
@@ -74,6 +75,7 @@ function log(msg: string) {
 // --- Broker communication ---
 
 let myId: PeerId | null = null;
+let myRole: string = "unknown";
 let myToken: string | null = null;
 let myCwd = process.cwd();
 let myGitRoot: string | null = null;
@@ -125,6 +127,7 @@ async function register(summary: string): Promise<void> {
   });
   myId = reg.id;
   myToken = reg.instance_token;
+  myRole = reg.role ?? "unknown";
   currentSummary = summary;
   saveCurrentSession();
   log(`Registered as peer ${myId}`);
@@ -230,9 +233,10 @@ function scheduleReconnect() {
             signal: AbortSignal.timeout(10000),
           });
           if (res.ok) {
-            const data = await res.json() as { id: string; instance_token: string };
+            const data = await res.json() as { id: string; instance_token: string; role?: string };
             myId = data.id;
             myToken = data.instance_token;
+            myRole = data.role ?? myRole;
             saveCurrentSession();
             log("Resume successful, reconnecting WS...");
             wsFailCount = 0;
@@ -290,6 +294,11 @@ Available tools:
 - check_messages: Manually check for new messages (messages normally arrive via WebSocket push)
 - set_id: Set a custom peer ID (e.g. 'my-review-bot')
 - switch_id: Switch to a different peer identity if the wrong one was auto-resumed
+- whoami: Show your current peer ID, role, and summary
+- set_role: Set your role in the group (first time only after Phase 2)
+- get_group_doc: Fetch the group's shared Markdown documentation
+- set_group_doc: Publish group documentation (manager only after Phase 2)
+- generate_group_doc: Generate a team-doc template from current online members
 
 When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
   }
@@ -387,6 +396,53 @@ const TOOLS = [
       },
       required: ["id"],
     },
+  },
+  {
+    name: "whoami",
+    description: "Return your current peer ID, role, and summary. Use this to confirm your identity in the group.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "set_role",
+    description:
+      "Set your role. Phase 2 will restrict re-assignment to manager only.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        role: { type: "string" as const, description: "Your role name (e.g. 'developer')" },
+      },
+      required: ["role"],
+    },
+  },
+  {
+    name: "get_group_doc",
+    description:
+      "Fetch the group's shared documentation (Markdown). " +
+      "Contains team roster, role responsibilities, and workflow. " +
+      "Copy into your CLAUDE.md to keep your system prompt in sync.",
+    inputSchema: { type: "object" as const, properties: {} },
+  },
+  {
+    name: "set_group_doc",
+    description:
+      "Publish a Markdown document as the group's shared documentation. " +
+      "Only peers with role 'manager' can call this (Phase 2 enforcement). " +
+      "Use generate_group_doc to create a template first.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        doc: { type: "string" as const, description: "Markdown content for the group doc" },
+      },
+      required: ["doc"],
+    },
+  },
+  {
+    name: "generate_group_doc",
+    description:
+      "Generate a Markdown team-doc template from current online members. " +
+      "Returns the template text — review it, then call set_group_doc to publish. " +
+      "Manager should fill in responsibilities and workflow sections.",
+    inputSchema: { type: "object" as const, properties: {} },
   },
 ];
 
@@ -581,7 +637,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
           signal: AbortSignal.timeout(10000),
         });
-        const resumeData = await res.json() as { id?: string; instance_token?: string; error?: string };
+        const resumeData = await res.json() as { id?: string; instance_token?: string; role?: string; error?: string };
         if (!res.ok) {
           return { content: [{ type: "text" as const, text: `Cannot switch: ${resumeData.error}` }], isError: true };
         }
@@ -608,6 +664,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const oldId = myId;
         myId = resumeData.id;
         myToken = resumeData.instance_token;
+        myRole = resumeData.role ?? "unknown";
         // Restore summary from target session so forced re-registration uses
         // the correct summary, mirroring the pattern in tryResumeSession.
         currentSummary = targetSession.summary || "";
@@ -621,6 +678,131 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         return { content: [{ type: "text" as const, text: `Switched from ${oldId} to ${myId}` }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Error: ${e instanceof Error ? e.message : String(e)}` }], isError: true };
+      }
+    }
+
+    case "whoami": {
+      return {
+        content: [{
+          type: "text" as const,
+          text: [
+            `Peer ID: ${myId ?? "(not registered)"}`,
+            `Role:    ${myRole}`,
+            `Summary: ${currentSummary || "(none)"}`,
+            `CWD:     ${myCwd}`,
+            `Host:    ${myHostname}`,
+          ].join("\n"),
+        }],
+      };
+    }
+
+    case "set_role": {
+      const { role } = args as { role: string };
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-role", { role });
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        }
+        myRole = role;
+        return { content: [{ type: "text" as const, text: `Role set to: ${role}` }] };
+      } catch (e) {
+        return friendlyError(e);
+      }
+    }
+
+    case "get_group_doc": {
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ doc: string }>("/get-group-doc", {});
+        if (!result.doc) {
+          return {
+            content: [{ type: "text" as const, text: "No group doc set yet. Call generate_group_doc to create a template, then set_group_doc to publish it." }],
+          };
+        }
+        return { content: [{ type: "text" as const, text: result.doc }] };
+      } catch (e) {
+        return friendlyError(e);
+      }
+    }
+
+    case "set_group_doc": {
+      const { doc } = args as { doc: string };
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-group-doc", { doc });
+        if (!result.ok) {
+          return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: "Group doc updated successfully." }] };
+      } catch (e) {
+        return friendlyError(e);
+      }
+    }
+
+    case "generate_group_doc": {
+      if (!myId || !myToken) {
+        return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
+      }
+      try {
+        const peers = await brokerFetch<Array<{ id: string; role: string; summary: string }>>("/list-peers", {
+          scope: "group",
+          cwd: myCwd,
+          hostname: myHostname,
+          git_root: myGitRoot,
+        });
+        const allMembers = [
+          { id: myId, role: myRole, summary: currentSummary || "(未填写)" },
+          ...peers.map((p) => ({ id: p.id, role: p.role ?? "unknown", summary: p.summary || "(未填写)" })),
+        ];
+        const now = new Date().toISOString().slice(0, 10);
+        const tableRows = allMembers
+          .map((m) => `| ${m.id} | ${m.role} | ${m.summary} |`)
+          .join("\n");
+        const uniqueRoles = [...new Set(allMembers.map((m) => m.role))];
+        const roleBlocks = uniqueRoles
+          .map((r) => `### ${r}\n<!-- 填写 ${r} 的详细职责 -->`)
+          .join("\n\n");
+        const template = `# 团队说明文档
+
+> 由 generate_group_doc 生成于 ${now}。请 manager 补充完善后调用 set_group_doc 提交。
+
+## 成员列表
+
+| Peer ID | 角色 | 职责说明 |
+|---------|------|---------|
+${tableRows}
+
+## 职责详情
+
+${roleBlocks}
+
+## 工作流程
+
+<!-- 描述团队协作流程，例如：
+1. manager 在 doc/ 目录创建需求文档，send_message 通知 developer
+2. developer 完成开发后 send_message 通知 tester
+3. tester 完成测试后 send_message 汇报 manager
+-->
+
+## 沟通规范
+
+大段内容（PRD、设计方案、review 报告）放 doc/ 目录，通过 send_message 发送路径引用。
+`;
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Template generated. Review below, then call set_group_doc to publish:\n\n${template}`,
+          }],
+        };
+      } catch (e) {
+        return friendlyError(e);
       }
     }
 
@@ -651,9 +833,10 @@ async function tryResumeSession(): Promise<boolean> {
       });
 
       if (res.ok) {
-        const data = await res.json() as { id: string; instance_token: string };
+        const data = await res.json() as ResumeResponse;
         myId = data.id;
         myToken = data.instance_token;
+        myRole = data.role ?? "unknown";
         // Restore the summary from the session file so forced re-registration
         // after WS failures uses the correct summary, not the stale startup value.
         if (session.summary) currentSummary = session.summary;

@@ -17,6 +17,8 @@ import type {
   RegisterRequest,
   RegisterResponse,
   SetSummaryRequest,
+  SetRoleRequest,
+  SetGroupDocRequest,
   ListPeersRequest,
   SendMessageRequest,
   ResumeRequest,
@@ -145,6 +147,20 @@ db.run(`
 // Migration: add status column if missing (pre-v2 schema)
 try {
   db.run("ALTER TABLE peers ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+} catch {
+  // Column already exists
+}
+
+// Migration: add role column to peers if missing
+try {
+  db.run("ALTER TABLE peers ADD COLUMN role TEXT NOT NULL DEFAULT 'unknown'");
+} catch {
+  // Column already exists
+}
+
+// Migration: add doc column to groups if missing
+try {
+  db.run("ALTER TABLE groups ADD COLUMN doc TEXT NOT NULL DEFAULT ''");
 } catch {
   // Column already exists
 }
@@ -300,6 +316,30 @@ const updateMessageToId = db.prepare(`
   UPDATE messages SET to_id = ? WHERE to_id = ? AND group_id = ?
 `);
 
+const updatePeerRole = db.prepare(`
+  UPDATE peers SET role = ? WHERE instance_token = ?
+`);
+
+const updatePeerRoleById = db.prepare(`
+  UPDATE peers SET role = ? WHERE id = ? AND group_id = ?
+`); // Used in Phase 2 set_role (peer_id path)
+
+const selectGroupDoc = db.prepare(`
+  SELECT doc FROM groups WHERE group_id = ?
+`);
+
+const updateGroupDoc = db.prepare(`
+  UPDATE groups SET doc = ? WHERE group_id = ?
+`);
+
+const selectAllGroupsWithCounts = db.prepare(`
+  SELECT g.group_id, g.created_at,
+         COUNT(CASE WHEN p.status = 'active' THEN 1 END) AS active_peers
+  FROM groups g
+  LEFT JOIN peers p ON p.group_id = g.group_id
+  GROUP BY g.group_id, g.created_at
+`);
+
 function cleanStale() {
   const now = Date.now();
 
@@ -449,7 +489,7 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Failed to generate unique peer ID, please retry", status: 500 };
   }
 
-  return { id, instance_token: instanceToken };
+  return { id, instance_token: instanceToken, role: "unknown" };
 }
 
 function handleListPeers(body: ListPeersRequest, callerPeer: Peer): PublicPeer[] {
@@ -595,7 +635,7 @@ function handleResume(body: ResumeRequest): { id: string; instance_token: string
     wsPool.set(newToken, oldWs);
     oldWs.data.instanceToken = newToken;
   }
-  return { id: peer.id, instance_token: newToken };
+  return { id: peer.id, instance_token: newToken, role: peer.role };
 }
 
 function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { error: string; status: number } {
@@ -639,6 +679,38 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
   }
   // wsPool is keyed by instance_token — no key update needed on ID rename
   return { id: newId };
+}
+
+function handleSetRole(
+  body: SetRoleRequest,
+  callerPeer: Peer
+): { ok: boolean; error?: string } {
+  if (!body.role || typeof body.role !== "string" || body.role.length > 64) {
+    return { ok: false, error: "Invalid role" };
+  }
+  // Phase 1: no restrictions — any peer can set their own role
+  updatePeerRole.run(body.role, callerPeer.instance_token);
+  return { ok: true };
+}
+
+function handleGetGroupDoc(callerPeer: Peer): { doc: string } {
+  const row = selectGroupDoc.get(callerPeer.group_id) as { doc: string } | null;
+  return { doc: row?.doc ?? "" };
+}
+
+function handleSetGroupDoc(
+  body: SetGroupDocRequest,
+  callerPeer: Peer
+): { ok: boolean; error?: string } {
+  if (typeof body.doc !== "string") {
+    return { ok: false, error: "Missing or invalid doc field" };
+  }
+  if (body.doc.length > 100_000) {
+    return { ok: false, error: "Doc too long (max 100KB)" };
+  }
+  // Phase 1: no role check
+  updateGroupDoc.run(body.doc, callerPeer.group_id);
+  return { ok: true };
 }
 
 // --- HTTP poll for undelivered messages ---
@@ -768,6 +840,21 @@ Bun.serve<WsData>({
     }
 
     // --- POST endpoints ---
+    // /admin/groups — API key auth, no group secret required
+    if (path === "/admin/groups") {
+      const authHeader = req.headers.get("Authorization");
+      const apiKey = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+      if (!apiKey || !verifyApiKey(apiKey)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      const groups = selectAllGroupsWithCounts.all() as Array<{
+        group_id: string;
+        created_at: string;
+        active_peers: number;
+      }>;
+      return Response.json(groups);
+    }
+
     if (req.method !== "POST") {
       return new Response("claude-peers broker", { status: 200 });
     }
@@ -834,6 +921,16 @@ Bun.serve<WsData>({
             if ("error" in result) {
               return Response.json({ error: result.error }, { status: result.status });
             }
+            return Response.json(result);
+          }
+          case "/set-role": {
+            const result = handleSetRole(body as SetRoleRequest, callerPeer);
+            return Response.json(result);
+          }
+          case "/get-group-doc":
+            return Response.json(handleGetGroupDoc(callerPeer));
+          case "/set-group-doc": {
+            const result = handleSetGroupDoc(body as SetGroupDocRequest, callerPeer);
             return Response.json(result);
           }
           case "/check-messages":

@@ -109,6 +109,7 @@ switch (cmd) {
           cwd: string;
           git_root: string | null;
           summary: string;
+          role: string;
           last_seen: string;
         }>
       >("/list-peers", {
@@ -122,7 +123,7 @@ switch (cmd) {
         console.log("No other peers in this group.");
       } else {
         for (const p of peers) {
-          console.log(`  ${p.id}  ${p.hostname}  ${p.cwd}`);
+          console.log(`  ${p.id}  [${p.role}]  ${p.hostname}  ${p.cwd}`);
           if (p.summary) console.log(`         ${p.summary}`);
           console.log(`         Last seen: ${p.last_seen}`);
         }
@@ -176,6 +177,53 @@ switch (cmd) {
     break;
   }
 
+  case "groups": {
+    try {
+      const res = await fetch(`${BROKER_URL}/admin/groups`, {
+        headers: { Authorization: `Bearer ${API_KEY}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      const groups = await res.json() as Array<{
+        group_id: string;
+        created_at: string;
+        active_peers: number;
+      }>;
+      if (groups.length === 0) {
+        console.log("No groups registered.");
+      } else {
+        console.log(`${groups.length} group(s):`);
+        for (const g of groups) {
+          console.log(`  ${g.group_id}  peers=${g.active_peers}  created=${g.created_at}`);
+        }
+      }
+    } catch (e) {
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    break;
+  }
+
+  case "group-doc": {
+    if (!GROUP_SECRET) {
+      console.error("Required: CLAUDE_PEERS_GROUP_SECRET env var");
+      process.exit(1);
+    }
+    try {
+      await registerCli();
+      const result = await brokerFetch<{ doc: string }>("/get-group-doc", {});
+      if (!result.doc) {
+        console.log("(No group doc set. Use set_group_doc MCP tool to publish one.)");
+      } else {
+        console.log(result.doc);
+      }
+    } catch (e) {
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      await unregisterCli();
+    }
+    break;
+  }
+
   default:
     console.log(`claude-peers CLI
 
@@ -186,7 +234,9 @@ Required env vars:
 
 Usage:
   bun cli.ts status              Show broker status
-  bun cli.ts peers               List all peers in your group
+  bun cli.ts groups              List all groups with active peer counts (API key only)
+  bun cli.ts peers               List peers in your group (shows role)
+  bun cli.ts group-doc           Print the group doc for your group
   bun cli.ts send <id> <msg>     Send a message to a peer
-  bun cli.ts kill-broker         Stop the broker daemon (local only)`);
+  bun cli.ts kill-broker         Stop the broker daemon`);
 }
