@@ -487,7 +487,7 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
     return { error: "Failed to generate unique peer ID, please retry", status: 500 };
   }
 
-  return { id, instance_token: instanceToken };
+  return { id, instance_token: instanceToken, role: "unknown" };
 }
 
 function handleListPeers(body: ListPeersRequest, callerPeer: Peer): PublicPeer[] {
@@ -633,7 +633,7 @@ function handleResume(body: ResumeRequest): { id: string; instance_token: string
     wsPool.set(newToken, oldWs);
     oldWs.data.instanceToken = newToken;
   }
-  return { id: peer.id, instance_token: newToken };
+  return { id: peer.id, instance_token: newToken, role: peer.role };
 }
 
 function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { error: string; status: number } {
