@@ -10,6 +10,7 @@ export interface Peer {
   group_id: string;
   instance_token: string;
   summary: string;
+  role: string;          // 'unknown' | 'manager' | 'developer' | 'tester' | ...
   registered_at: string; // ISO timestamp
   last_seen: string; // ISO timestamp
   status: "active" | "dormant";
@@ -39,6 +40,7 @@ export interface RegisterRequest {
 export interface RegisterResponse {
   id: PeerId;
   instance_token: string;
+  role: string;
 }
 
 export interface SetSummaryRequest {
@@ -69,6 +71,7 @@ export interface ResumeRequest {
 export interface ResumeResponse {
   id: PeerId;
   instance_token: string;
+  role: string;
 }
 
 export interface SetIdRequest {
@@ -77,6 +80,19 @@ export interface SetIdRequest {
 
 export interface SetIdResponse {
   id: PeerId;
+}
+
+export interface SetRoleRequest {
+  role: string;
+  peer_id?: string;      // Phase 2: manager can set another peer's role
+}
+
+export interface GetGroupDocResponse {
+  doc: string;
+}
+
+export interface SetGroupDocRequest {
+  doc: string;
 }
 
 // Peer without internal/sensitive fields — safe to return in list-peers
