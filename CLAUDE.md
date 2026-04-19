@@ -8,6 +8,20 @@ alwaysApply: false
 
 Peer discovery and messaging MCP channel for Claude Code instances.
 
+## 团队通讯录
+
+本项目通过 claude-peers MCP 协作，团队成员（peer ID）与职责如下：
+
+| ID | 角色 | 职责 |
+|----|------|------|
+| `manager` | 开发经理 | 项目开发计划、设计、文档编写、代码审查；协调开发与测试工作，安排任务并跟踪进度。 |
+| `developer` | 开发人员 | 实际代码开发；接受 manager 的任务安排，修复 manager 的 review 事项，处理 tester 反馈的测试故障。 |
+| `tester` | 测试人员 | 项目测试工作；将测试结果反馈给 developer，有分歧时提交 manager 裁决；受理 manager 安排的任务。 |
+
+协作时通过 `send_message` 按 ID 直接通讯，`list_peers` 可查看当前在线成员与各自 summary。
+
+大段信息（PRD、设计方案、review、测试报告等）放入仓库的 `doc/` 目录，通过 `send_message` 发送文件路径引用。详见 `doc/README.md`。
+
 ## Architecture
 
 - `broker.ts` — HTTP daemon on 0.0.0.0:7899 + SQLite. Run once per network (not auto-launched). API key auth + group-based isolation.
