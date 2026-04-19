@@ -109,6 +109,7 @@ switch (cmd) {
           cwd: string;
           git_root: string | null;
           summary: string;
+          role: string;
           last_seen: string;
         }>
       >("/list-peers", {
@@ -122,7 +123,7 @@ switch (cmd) {
         console.log("No other peers in this group.");
       } else {
         for (const p of peers) {
-          console.log(`  ${p.id}  [${(p as any).role ?? "unknown"}]  ${p.hostname}  ${p.cwd}`);
+          console.log(`  ${p.id}  [${p.role}]  ${p.hostname}  ${p.cwd}`);
           if (p.summary) console.log(`         ${p.summary}`);
           console.log(`         Last seen: ${p.last_seen}`);
         }

@@ -22,6 +22,7 @@ import type {
   PeerId,
   Peer,
   RegisterResponse,
+  ResumeResponse,
   WsPushMessage,
 } from "./shared/types.ts";
 import {
@@ -232,9 +233,10 @@ function scheduleReconnect() {
             signal: AbortSignal.timeout(10000),
           });
           if (res.ok) {
-            const data = await res.json() as { id: string; instance_token: string };
+            const data = await res.json() as { id: string; instance_token: string; role?: string };
             myId = data.id;
             myToken = data.instance_token;
+            myRole = data.role ?? myRole;
             saveCurrentSession();
             log("Resume successful, reconnecting WS...");
             wsFailCount = 0;
@@ -403,8 +405,7 @@ const TOOLS = [
   {
     name: "set_role",
     description:
-      "Set your role in the group (e.g. 'manager', 'developer', 'tester'). " +
-      "Can only be set once per peer — once set, only a manager can change it.",
+      "Set your role. Phase 2 will restrict re-assignment to manager only.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -832,10 +833,10 @@ async function tryResumeSession(): Promise<boolean> {
       });
 
       if (res.ok) {
-        const data = await res.json() as { id: string; instance_token: string };
+        const data = await res.json() as ResumeResponse;
         myId = data.id;
         myToken = data.instance_token;
-        myRole = (data as { id: string; instance_token: string; role?: string }).role ?? "unknown";
+        myRole = data.role ?? "unknown";
         // Restore the summary from the session file so forced re-registration
         // after WS failures uses the correct summary, not the stale startup value.
         if (session.summary) currentSummary = session.summary;

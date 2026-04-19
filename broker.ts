@@ -322,7 +322,7 @@ const updatePeerRole = db.prepare(`
 
 const updatePeerRoleById = db.prepare(`
   UPDATE peers SET role = ? WHERE id = ? AND group_id = ?
-`);
+`); // Used in Phase 2 set_role (peer_id path)
 
 const selectGroupDoc = db.prepare(`
   SELECT doc FROM groups WHERE group_id = ?
