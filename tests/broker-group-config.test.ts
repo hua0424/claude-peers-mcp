@@ -157,11 +157,11 @@ test("set_role: non-manager with existing role cannot change own role", async ()
   await unreg(a.instance_token);
 });
 
-test("set_role: manager can change own role", async () => {
+test("set_role: manager can change own role (including downgrade)", async () => {
   const a = await reg(30003);
   await authedPost(a.instance_token, "/set-role", { role: "manager" });
-  const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-role", { role: "manager" });
-  expect(r.status).toBe(200);
+  const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-role", { role: "developer" }); // 自降级
+  expect(r.status).toBe(200); // 允许，但此后无法再写 group doc
   await unreg(a.instance_token);
 });
 
@@ -192,5 +192,15 @@ test("set_group_doc: manager can write", async () => {
   await authedPost(a.instance_token, "/set-role", { role: "manager" });
   const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-group-doc", { doc: "# Official Doc" });
   expect(r.status).toBe(200);
+  await unreg(a.instance_token);
+});
+
+test("set_role: non-manager passing own peer_id cannot bypass", async () => {
+  const a = await reg(30008);
+  await authedPost(a.instance_token, "/set-role", { role: "developer" }); // 首次设置
+  const r = await authedPost<{ ok: boolean; error?: string }>(
+    a.instance_token, "/set-role", { role: "tester", peer_id: a.id }
+  );
+  expect(r.status).toBe(403); // peer_id=own_id 落入 own-role 路径，被拦截
   await unreg(a.instance_token);
 });

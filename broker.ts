@@ -691,6 +691,7 @@ function handleSetRole(
 
   const targetPeerId = body.peer_id;
 
+  // If peer_id equals caller's own ID, fall through to own-role enforcement below.
   if (targetPeerId && targetPeerId !== callerPeer.id) {
     // Manager changing another peer's role
     if (callerPeer.role !== "manager") {
