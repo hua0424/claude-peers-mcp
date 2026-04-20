@@ -4,26 +4,52 @@
  *
  * Utility commands for inspecting broker state and sending messages.
  *
- * Required env vars:
- *   CLAUDE_PEERS_BROKER_URL    — e.g. http://10.0.0.5:7899
- *   CLAUDE_PEERS_API_KEY       — must match broker's configured key
- *   CLAUDE_PEERS_GROUP_SECRET  — required for peers/send commands
+ * Flags (take precedence over env vars):
+ *   --broker-url <url>      Broker address (env: CLAUDE_PEERS_BROKER_URL)
+ *   --api-key <key>         Broker access key (env: CLAUDE_PEERS_API_KEY)
+ *   --group-secret <secret> Group secret for group-scoped commands (env: CLAUDE_PEERS_GROUP_SECRET)
  *
  * Usage:
- *   bun cli.ts status              — Show broker status
- *   bun cli.ts peers               — List all peers in your group
- *   bun cli.ts send <id> <msg>     — Send a message to a peer
- *   bun cli.ts kill-broker          — Stop the broker daemon
+ *   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret status
+ *   bun cli.ts --group-secret mygroup peers
+ *   bun cli.ts send <id> <msg>
+ *   bun cli.ts kill-broker
  */
 
 import { hostname } from "node:os";
 
-const BROKER_URL = process.env.CLAUDE_PEERS_BROKER_URL;
-const API_KEY = process.env.CLAUDE_PEERS_API_KEY;
-const GROUP_SECRET = process.env.CLAUDE_PEERS_GROUP_SECRET;
+function parseArgs(argv: string[]): { flags: Record<string, string>; positional: string[] } {
+  const flags: Record<string, string> = {};
+  const positional: string[] = [];
+  let i = 0;
+  while (i < argv.length) {
+    if (argv[i].startsWith("--")) {
+      const key = argv[i].slice(2);
+      if (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        flags[key] = argv[i + 1];
+        i += 2;
+      } else {
+        flags[key] = "true";
+        i++;
+      }
+    } else {
+      positional.push(argv[i]);
+      i++;
+    }
+  }
+  return { flags, positional };
+}
+
+const { flags, positional } = parseArgs(process.argv.slice(2));
+
+const BROKER_URL = flags["broker-url"] ?? process.env.CLAUDE_PEERS_BROKER_URL;
+const API_KEY = flags["api-key"] ?? process.env.CLAUDE_PEERS_API_KEY;
+const GROUP_SECRET = flags["group-secret"] ?? process.env.CLAUDE_PEERS_GROUP_SECRET;
 
 if (!BROKER_URL || !API_KEY) {
-  console.error("Required: CLAUDE_PEERS_BROKER_URL and CLAUDE_PEERS_API_KEY env vars");
+  console.error(
+    "Required: --broker-url <url> and --api-key <key> (or CLAUDE_PEERS_BROKER_URL / CLAUDE_PEERS_API_KEY env vars)"
+  );
   process.exit(1);
 }
 
@@ -51,7 +77,7 @@ async function brokerFetch<T>(path: string, body?: unknown, useToken = true): Pr
 
 async function registerCli(): Promise<void> {
   if (!GROUP_SECRET) {
-    console.error("Required: CLAUDE_PEERS_GROUP_SECRET env var for this command");
+    console.error("Required: --group-secret <secret> (or CLAUDE_PEERS_GROUP_SECRET env var)");
     process.exit(1);
   }
   const reg = await brokerFetch<{ id: string; instance_token: string }>(
@@ -79,7 +105,7 @@ async function unregisterCli(): Promise<void> {
   }
 }
 
-const cmd = process.argv[2];
+const cmd = positional[0];
 
 switch (cmd) {
   case "status": {
@@ -137,8 +163,8 @@ switch (cmd) {
   }
 
   case "send": {
-    const toId = process.argv[3];
-    const msg = process.argv.slice(4).join(" ");
+    const toId = positional[1];
+    const msg = positional.slice(2).join(" ");
     if (!toId || !msg) {
       console.error("Usage: bun cli.ts send <peer-id> <message>");
       process.exit(1);
@@ -205,7 +231,7 @@ switch (cmd) {
 
   case "group-doc": {
     if (!GROUP_SECRET) {
-      console.error("Required: CLAUDE_PEERS_GROUP_SECRET env var");
+      console.error("Required: --group-secret <secret> (or CLAUDE_PEERS_GROUP_SECRET env var)");
       process.exit(1);
     }
     try {
@@ -227,16 +253,21 @@ switch (cmd) {
   default:
     console.log(`claude-peers CLI
 
-Required env vars:
-  CLAUDE_PEERS_BROKER_URL     Broker address (e.g. http://10.0.0.5:7899)
-  CLAUDE_PEERS_API_KEY        Broker access key
-  CLAUDE_PEERS_GROUP_SECRET   Group secret (for peers/send commands)
+Flags (override env vars):
+  --broker-url <url>       Broker address (env: CLAUDE_PEERS_BROKER_URL)
+  --api-key <key>          Broker access key (env: CLAUDE_PEERS_API_KEY)
+  --group-secret <secret>  Group secret for group-scoped commands (env: CLAUDE_PEERS_GROUP_SECRET)
 
-Usage:
-  bun cli.ts status              Show broker status
-  bun cli.ts groups              List all groups with active peer counts (API key only)
-  bun cli.ts peers               List peers in your group (shows role)
-  bun cli.ts group-doc           Print the group doc for your group
-  bun cli.ts send <id> <msg>     Send a message to a peer
-  bun cli.ts kill-broker         Stop the broker daemon`);
+Commands:
+  status                   Show broker status
+  groups                   List all groups with active peer counts (API key only)
+  peers                    List peers in your group (shows role)
+  group-doc                Print the group doc for your group
+  send <id> <msg>          Send a message to a peer
+  kill-broker              Stop the broker daemon
+
+Examples:
+  bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret status
+  bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup peers
+  bun cli.ts --group-secret mygroup send alice Hello!`);
 }
