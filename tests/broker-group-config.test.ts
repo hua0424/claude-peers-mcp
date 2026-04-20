@@ -105,6 +105,7 @@ test("get_group_doc returns empty string initially", async () => {
 
 test("set_group_doc and get_group_doc round-trip", async () => {
   const a = await reg(20006);
+  await authedPost(a.instance_token, "/set-role", { role: "manager" });
   const doc = "# Team Doc\n\nHello team.";
   const setR = await authedPost<{ ok: boolean }>(a.instance_token, "/set-group-doc", { doc });
   expect(setR.status).toBe(200);

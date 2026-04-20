@@ -405,11 +405,15 @@ const TOOLS = [
   {
     name: "set_role",
     description:
-      "Set your role. Phase 2 will restrict re-assignment to manager only.",
+      "Set a peer's role in the group. " +
+      "Peers with no role ('unknown') can set their own role once. " +
+      "After that, only a peer with role 'manager' can change roles. " +
+      "Manager can also set another peer's role by passing peer_id.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        role: { type: "string" as const, description: "Your role name (e.g. 'developer')" },
+        role: { type: "string" as const, description: "Role name (e.g. 'developer', 'tester', 'manager')" },
+        peer_id: { type: "string" as const, description: "Target peer ID (manager only — omit to set your own role)" },
       },
       required: ["role"],
     },
@@ -697,17 +701,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "set_role": {
-      const { role } = args as { role: string };
+      const { role, peer_id } = args as { role: string; peer_id?: string };
       if (!myId || !myToken) {
         return { content: [{ type: "text" as const, text: "Not registered with broker yet" }], isError: true };
       }
       try {
-        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-role", { role });
+        const payload: { role: string; peer_id?: string } = { role };
+        if (peer_id) payload.peer_id = peer_id;
+        const result = await brokerFetch<{ ok: boolean; error?: string }>("/set-role", payload);
         if (!result.ok) {
           return { content: [{ type: "text" as const, text: `Failed: ${result.error}` }], isError: true };
         }
-        myRole = role;
-        return { content: [{ type: "text" as const, text: `Role set to: ${role}` }] };
+        if (!peer_id || peer_id === myId) myRole = role;
+        return { content: [{ type: "text" as const, text: peer_id ? `Role of ${peer_id} set to: ${role}` : `Your role set to: ${role}` }] };
       } catch (e) {
         return friendlyError(e);
       }
