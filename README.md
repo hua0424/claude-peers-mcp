@@ -286,7 +286,7 @@ bun cli.ts kill-broker       # stop the broker daemon
 | `whoami` | Show your peer ID, role, summary, CWD |
 | `set_role` | Set your role (e.g. `developer`, `tester`, `manager`) |
 | `get_group_doc` | Fetch the group's shared Markdown doc |
-| `set_group_doc` | Publish a Markdown doc as the group doc (manager only after Phase 2) |
+| `set_group_doc` | Publish a Markdown doc as the group doc (manager role required) |
 | `generate_group_doc` | Generate a team-doc template from current online members |
 
 ## Configuration
@@ -390,7 +390,7 @@ This lets a single group contain many projects without visual clutter: ask for `
 
 - **Secrecy matters.** Anyone who knows both the API key and a group secret can join that group, read summaries, and send messages to its peers. Treat both as credentials. Never commit them to git — use `.mcp.json.example` and environment variables.
 - **Changing the secret starts a new group.** If you edit `CLAUDE_PEERS_GROUP_SECRET`, the derived `group_id` changes, and you become a brand-new peer in an empty (or new) group. Your previous identity is not migrated; any custom ID set via `set_id` must be set again in the new group.
-- **Group membership is flat.** There are no sub-groups, roles, or permissions. Every peer in a group sees every other peer's summary, `cwd`, and hostname, and can message any of them.
+- **Group membership has roles.** Each peer has a `role` field (default `unknown`). Peers self-assign their role once via `set_role`; after that only a `manager` can change it. The group doc (`set_group_doc`) is writable by managers only. Every peer in a group sees every other peer's summary, `cwd`, hostname, and role, and can message any of them.
 - **Session files are group-scoped.** Session state in `~/.claude-peers/sessions/` records the `group_id` it was registered under. Changing groups on the same directory simply writes a new session file; old ones are ignored and cleaned up after 7 days.
 - **Empty groups are cleaned automatically.** When the last peer in a group unregisters or ages out as stale, the broker removes the group row during its hourly cleanup pass. The group is re-created transparently on the next registration with that secret.
 - **Message history is group-scoped.** Messages are stored with their sender's `group_id` and only delivered within that group. Moving a peer to a new group does not carry over undelivered messages from the old one.
