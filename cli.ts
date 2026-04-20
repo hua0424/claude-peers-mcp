@@ -4,16 +4,18 @@
  *
  * Utility commands for inspecting broker state and sending messages.
  *
- * Flags (take precedence over env vars):
- *   --broker-url <url>      Broker address (env: CLAUDE_PEERS_BROKER_URL)
- *   --api-key <key>         Broker access key (env: CLAUDE_PEERS_API_KEY)
- *   --group-secret <secret> Group secret for group-scoped commands (env: CLAUDE_PEERS_GROUP_SECRET)
+ * Required flags:
+ *   --broker-url <url>      Broker address, e.g. http://10.0.0.5:7899
+ *   --api-key <key>         Broker access key
+ *
+ * Optional flags:
+ *   --group-secret <secret> Group secret (required for peers/send/group-doc commands)
  *
  * Usage:
  *   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret status
- *   bun cli.ts --group-secret mygroup peers
- *   bun cli.ts send <id> <msg>
- *   bun cli.ts kill-broker
+ *   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup peers
+ *   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup send alice Hello!
+ *   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret kill-broker
  */
 
 import { hostname } from "node:os";
@@ -42,14 +44,12 @@ function parseArgs(argv: string[]): { flags: Record<string, string>; positional:
 
 const { flags, positional } = parseArgs(process.argv.slice(2));
 
-const BROKER_URL = flags["broker-url"] ?? process.env.CLAUDE_PEERS_BROKER_URL;
-const API_KEY = flags["api-key"] ?? process.env.CLAUDE_PEERS_API_KEY;
-const GROUP_SECRET = flags["group-secret"] ?? process.env.CLAUDE_PEERS_GROUP_SECRET;
+const BROKER_URL = flags["broker-url"];
+const API_KEY = flags["api-key"];
+const GROUP_SECRET = flags["group-secret"];
 
 if (!BROKER_URL || !API_KEY) {
-  console.error(
-    "Required: --broker-url <url> and --api-key <key> (or CLAUDE_PEERS_BROKER_URL / CLAUDE_PEERS_API_KEY env vars)"
-  );
+  console.error("Required: --broker-url <url> and --api-key <key>");
   process.exit(1);
 }
 
@@ -253,14 +253,16 @@ switch (cmd) {
   default:
     console.log(`claude-peers CLI
 
-Flags (override env vars):
-  --broker-url <url>       Broker address (env: CLAUDE_PEERS_BROKER_URL)
-  --api-key <key>          Broker access key (env: CLAUDE_PEERS_API_KEY)
-  --group-secret <secret>  Group secret for group-scoped commands (env: CLAUDE_PEERS_GROUP_SECRET)
+Required flags:
+  --broker-url <url>       Broker address, e.g. http://10.0.0.5:7899
+  --api-key <key>          Broker access key
+
+Optional flags:
+  --group-secret <secret>  Group secret (required for peers/send/group-doc/groups commands)
 
 Commands:
   status                   Show broker status
-  groups                   List all groups with active peer counts (API key only)
+  groups                   List all groups with active peer counts
   peers                    List peers in your group (shows role)
   group-doc                Print the group doc for your group
   send <id> <msg>          Send a message to a peer
@@ -269,5 +271,5 @@ Commands:
 Examples:
   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret status
   bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup peers
-  bun cli.ts --group-secret mygroup send alice Hello!`);
+  bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup send alice Hello!`);
 }

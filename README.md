@@ -259,24 +259,37 @@ For a deeper walkthrough — typical group layouts, running multiple groups from
 
 ## CLI
 
-Inspect broker state and send messages from the command line:
+Inspect broker state and send messages from the command line.
+
+**Required flags** for every command:
+
+| Flag | Description |
+|------|-------------|
+| `--broker-url <url>` | Broker address, e.g. `http://10.0.0.5:7899` |
+| `--api-key <key>` | Broker access key |
+
+**Optional flag** (required for group-scoped commands):
+
+| Flag | Description |
+|------|-------------|
+| `--group-secret <secret>` | Group secret — needed for `peers`, `send`, `group-doc` |
+
+**Commands:**
 
 ```bash
-export CLAUDE_PEERS_BROKER_URL=http://10.0.0.5:7899
-export CLAUDE_PEERS_API_KEY=my-secret-key-123
-export CLAUDE_PEERS_GROUP_SECRET=team-alpha
+# Broker health
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret status
 
-# Broker health and group overview
-bun cli.ts status            # broker status
-bun cli.ts groups            # list all groups with active peer counts (API key only)
+# List all groups (API key only, no group secret needed)
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret groups
 
-# Group-scoped commands (requires CLAUDE_PEERS_GROUP_SECRET)
-bun cli.ts peers             # list peers in your group (ID, role, host, cwd)
-bun cli.ts group-doc         # print the group's shared Markdown documentation
-bun cli.ts send <id> <msg>   # send a message to a peer
+# Group-scoped commands
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup peers
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup group-doc
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret mygroup send alice Hello!
 
 # Broker control
-bun cli.ts kill-broker       # stop the broker daemon
+bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret kill-broker
 ```
 
 ## MCP Tools (new in this version)
