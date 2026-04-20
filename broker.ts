@@ -684,11 +684,30 @@ function handleSetId(body: SetIdRequest, callerPeer: Peer): { id: string } | { e
 function handleSetRole(
   body: SetRoleRequest,
   callerPeer: Peer
-): { ok: boolean; error?: string } {
+): { ok: boolean; error?: string } | { error: string; status: number } {
   if (!body.role || typeof body.role !== "string" || body.role.length > 64) {
-    return { ok: false, error: "Invalid role" };
+    return { error: "Invalid role", status: 400 };
   }
-  // Phase 1: no restrictions — any peer can set their own role
+
+  const targetPeerId = body.peer_id;
+
+  if (targetPeerId && targetPeerId !== callerPeer.id) {
+    // Manager changing another peer's role
+    if (callerPeer.role !== "manager") {
+      return { error: "Only manager can change another peer's role", status: 403 };
+    }
+    const target = selectPeerByIdAndGroup.get(targetPeerId, callerPeer.group_id) as Peer | null;
+    if (!target) {
+      return { error: `Peer ${targetPeerId} not found`, status: 404 };
+    }
+    updatePeerRole.run(body.role, target.instance_token);
+    return { ok: true };
+  }
+
+  // Setting own role
+  if (callerPeer.role !== "unknown" && callerPeer.role !== "manager") {
+    return { error: "Role already set. Only manager can change your role.", status: 403 };
+  }
   updatePeerRole.run(body.role, callerPeer.instance_token);
   return { ok: true };
 }
@@ -925,6 +944,9 @@ Bun.serve<WsData>({
           }
           case "/set-role": {
             const result = handleSetRole(body as SetRoleRequest, callerPeer);
+            if ("status" in result) {
+              return Response.json({ error: result.error }, { status: result.status });
+            }
             return Response.json(result);
           }
           case "/get-group-doc":
