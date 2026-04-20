@@ -137,3 +137,59 @@ test("resume returns role", async () => {
   expect(typeof b.role).toBe("string");
   await unreg(b.instance_token);
 });
+
+// --- Phase 2 tests (role enforcement) ---
+
+test("set_role: unknown peer can set role once", async () => {
+  const a = await reg(30001);
+  const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-role", { role: "developer" });
+  expect(r.status).toBe(200);
+  expect(r.data.ok).toBe(true);
+  await unreg(a.instance_token);
+});
+
+test("set_role: non-manager with existing role cannot change own role", async () => {
+  const a = await reg(30002);
+  await authedPost(a.instance_token, "/set-role", { role: "developer" }); // first-time set
+  const r = await authedPost<{ ok: boolean; error?: string }>(a.instance_token, "/set-role", { role: "tester" }); // blocked
+  expect(r.status).toBe(403);
+  await unreg(a.instance_token);
+});
+
+test("set_role: manager can change own role", async () => {
+  const a = await reg(30003);
+  await authedPost(a.instance_token, "/set-role", { role: "manager" });
+  const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-role", { role: "manager" });
+  expect(r.status).toBe(200);
+  await unreg(a.instance_token);
+});
+
+test("set_role: manager can change another peer's role", async () => {
+  const m = await reg(30004);
+  await authedPost(m.instance_token, "/set-role", { role: "manager" });
+  const d = await reg(30005);
+  await authedPost(d.instance_token, "/set-role", { role: "developer" });
+  // manager changes developer's role
+  const r = await authedPost<{ ok: boolean }>(m.instance_token, "/set-role", { role: "tester", peer_id: d.id });
+  expect(r.status).toBe(200);
+  // verify via list-peers
+  const peers = await authedPost<Array<{ id: string; role: string }>>(m.instance_token, "/list-peers", { scope: "group", cwd: "/c", hostname: "h", git_root: null });
+  expect(peers.data.find(p => p.id === d.id)?.role).toBe("tester");
+  await unreg(m.instance_token); await unreg(d.instance_token);
+});
+
+test("set_group_doc: non-manager gets 403", async () => {
+  const a = await reg(30006);
+  await authedPost(a.instance_token, "/set-role", { role: "developer" });
+  const r = await authedPost<{ ok: boolean; error?: string }>(a.instance_token, "/set-group-doc", { doc: "# hack" });
+  expect(r.status).toBe(403);
+  await unreg(a.instance_token);
+});
+
+test("set_group_doc: manager can write", async () => {
+  const a = await reg(30007);
+  await authedPost(a.instance_token, "/set-role", { role: "manager" });
+  const r = await authedPost<{ ok: boolean }>(a.instance_token, "/set-group-doc", { doc: "# Official Doc" });
+  expect(r.status).toBe(200);
+  await unreg(a.instance_token);
+});
