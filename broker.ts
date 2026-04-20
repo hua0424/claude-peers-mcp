@@ -720,14 +720,16 @@ function handleGetGroupDoc(callerPeer: Peer): { doc: string } {
 function handleSetGroupDoc(
   body: SetGroupDocRequest,
   callerPeer: Peer
-): { ok: boolean; error?: string } {
+): { ok: boolean; error?: string } | { error: string; status: number } {
+  if (callerPeer.role !== "manager") {
+    return { error: "Only manager can update group doc", status: 403 };
+  }
   if (typeof body.doc !== "string") {
-    return { ok: false, error: "Missing or invalid doc field" };
+    return { error: "Missing or invalid doc field", status: 400 };
   }
   if (body.doc.length > 100_000) {
-    return { ok: false, error: "Doc too long (max 100KB)" };
+    return { error: "Doc too long (max 100KB)", status: 400 };
   }
-  // Phase 1: no role check
   updateGroupDoc.run(body.doc, callerPeer.group_id);
   return { ok: true };
 }
@@ -953,6 +955,9 @@ Bun.serve<WsData>({
             return Response.json(handleGetGroupDoc(callerPeer));
           case "/set-group-doc": {
             const result = handleSetGroupDoc(body as SetGroupDocRequest, callerPeer);
+            if ("status" in result) {
+              return Response.json({ error: result.error }, { status: result.status });
+            }
             return Response.json(result);
           }
           case "/check-messages":
