@@ -302,6 +302,8 @@ bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret kill-broker
 | `set_group_doc` | Publish a Markdown doc as the group doc (manager role required) |
 | `generate_group_doc` | Generate a team-doc template from current online members |
 
+> **Group doc workflow:** Call `generate_group_doc` to get a pre-filled Markdown skeleton, review/edit it, then submit with `set_group_doc`. See [`doc/group-doc-example.md`](doc/group-doc-example.md) for a fully filled-in reference example.
+
 ## Configuration
 
 ### Broker
