@@ -340,6 +340,14 @@ const selectAllGroupsWithCounts = db.prepare(`
   GROUP BY g.group_id, g.created_at
 `);
 
+// --- WebSocket connection pool (keyed by instance_token) ---
+
+type WsData = { connId: string; instanceToken: string | null };
+const wsPool = new Map<string, ServerWebSocket<WsData>>();
+// Connections waiting for auth message
+const pendingConnections = new Map<string, ReturnType<typeof setTimeout>>();
+const WS_AUTH_TIMEOUT_MS = 5000;
+
 function cleanStale() {
   const now = Date.now();
 
@@ -381,14 +389,6 @@ function shutdown() {
 }
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
-
-// --- WebSocket connection pool (keyed by instance_token) ---
-
-type WsData = { connId: string; instanceToken: string | null };
-const wsPool = new Map<string, ServerWebSocket<WsData>>();
-// Connections waiting for auth message
-const pendingConnections = new Map<string, ReturnType<typeof setTimeout>>();
-const WS_AUTH_TIMEOUT_MS = 5000;
 
 // --- Input limits ---
 
