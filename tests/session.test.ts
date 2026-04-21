@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -130,7 +130,6 @@ test("scanSessions returns only sessions for the given group", () => {
   expect(b[0].group_id).toBe(groupB);
 });
 
-import { writeFileSync } from "node:fs";
 
 test("migrateSessionFiles renames legacy peer_id.json → group_id_peer_id.json", () => {
   const data = {
