@@ -2,7 +2,25 @@
 
 **日期**：2026-04-21
 **状态**：待实现
-**分支**：`fix/cross-group-session-isolation`（计划）
+**分支**：`fix/cross-group-session-isolation`（计划，本 PR 同时附带一个无关的启动崩溃小修复）
+
+---
+
+## 附加 Bug：broker 启动时 TDZ 崩溃
+
+**现象**：系统重启后启动 broker 报错：
+
+```
+ReferenceError: Cannot access 'wsPool' before initialization.
+    at cleanStale (broker.ts:350:21)
+    at broker.ts:371:1
+```
+
+**根因**：`cleanStale()` 在 [broker.ts:371](broker.ts) 于模块加载期立即调用，但它读取的 `wsPool` 在 [broker.ts:388](broker.ts) 才声明（`const`，受 TDZ 约束）。只有当 SQLite 中恰好存在过期 peer（`selectStalePeers` 返回非空）时才会触发——新建 DB 时此 bug 不显现，因此之前未被发现。
+
+**修复**：把 `wsPool` 与 `pendingConnections`、`WS_AUTH_TIMEOUT_MS` 的声明块整体前移到 `cleanStale` 函数定义之前即可。无语义变更。
+
+**为什么放进本 PR**：独立的一行顺序调整，足够小；同时 broker 起不来就无法验证主修复的端到端场景，顺手解决。
 
 ---
 
