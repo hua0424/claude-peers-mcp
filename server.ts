@@ -638,7 +638,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       // return a foreign-group session, but keep an explicit check in case a
       // legacy/corrupt file leaks through migration.
       if (targetSession.group_id !== GROUP_ID) {
-        deleteSession(SESSION_DIR, targetSession.group_id, targetSession.peer_id);
+        deleteSession(SESSION_DIR, GROUP_ID, id);
         return {
           content: [{
             type: "text" as const,
@@ -687,7 +687,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         currentSummary = targetSession.summary || "";
         // Remove the old session file for the target identity before writing the new one,
         // so scanSessions never sees two files for the same peer on next startup.
-        deleteSession(SESSION_DIR, targetSession.group_id, targetSession.peer_id);
+        deleteSession(SESSION_DIR, GROUP_ID, id);
         saveCurrentSession();
         // Reconnect WS with new token
         if (ws) ws.close(1000, "Switching identity");
