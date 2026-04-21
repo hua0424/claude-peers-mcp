@@ -32,7 +32,7 @@ import {
   getRecentFiles,
 } from "./shared/summarize.ts";
 import { hostname } from "node:os";
-import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions } from "./shared/session.ts";
+import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions, migrateSessionFiles } from "./shared/session.ts";
 import { deriveGroupId, isValidPeerId } from "./shared/auth.ts";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
@@ -834,6 +834,7 @@ ${roleBlocks}
 
 async function tryResumeSession(): Promise<boolean> {
   cleanupStaleSessions(SESSION_DIR, SESSION_CLEANUP_AGE_DAYS);
+  migrateSessionFiles(SESSION_DIR);
   const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID, myHostname);
 
   for (const session of sessions) {

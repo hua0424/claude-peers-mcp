@@ -129,3 +129,76 @@ test("scanSessions returns only sessions for the given group", () => {
   expect(b.length).toBe(1);
   expect(b[0].group_id).toBe(groupB);
 });
+
+import { writeFileSync } from "node:fs";
+
+test("migrateSessionFiles renames legacy peer_id.json → group_id_peer_id.json", () => {
+  const data = {
+    peer_id: "manager",
+    instance_token: "t".repeat(64),
+    cwd: "/tmp",
+    group_id: groupA,
+    hostname: "host1",
+    created_at: "2026-04-20T00:00:00Z",
+    last_used: "2026-04-20T00:00:00Z",
+  };
+  writeFileSync(join(dir, "manager.json"), JSON.stringify(data));
+
+  migrateSessionFiles(dir);
+
+  const files = readdirSync(dir).sort();
+  expect(files).toEqual([`${groupA}_manager.json`]);
+  const loaded = loadSession(dir, groupA, "manager");
+  expect(loaded?.instance_token).toBe("t".repeat(64));
+});
+
+test("migrateSessionFiles deletes corrupt or unidentifiable legacy files", () => {
+  writeFileSync(join(dir, "foo.json"), "{not valid json");
+  writeFileSync(join(dir, "bar.json"), JSON.stringify({ peer_id: "bar" })); // no group_id
+
+  migrateSessionFiles(dir);
+
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("migrateSessionFiles is idempotent on already-migrated files", () => {
+  saveSession(dir, {
+    peer_id: "manager",
+    instance_token: "t".repeat(64),
+    cwd: "/tmp",
+    group_id: groupA,
+    hostname: "host1",
+  });
+  const before = readdirSync(dir);
+  migrateSessionFiles(dir);
+  const after = readdirSync(dir);
+  expect(after).toEqual(before);
+});
+
+test("migrateSessionFiles drops legacy file when new-format target already exists", () => {
+  saveSession(dir, {
+    peer_id: "manager",
+    instance_token: "t".repeat(64),
+    cwd: "/tmp",
+    group_id: groupA,
+    hostname: "host1",
+  });
+  // legacy file referring to the same (group, peer)
+  writeFileSync(
+    join(dir, "manager.json"),
+    JSON.stringify({
+      peer_id: "manager",
+      instance_token: "u".repeat(64),
+      cwd: "/tmp",
+      group_id: groupA,
+      hostname: "host1",
+    })
+  );
+
+  migrateSessionFiles(dir);
+
+  const files = readdirSync(dir);
+  expect(files).toEqual([`${groupA}_manager.json`]);
+  // New-format wins
+  expect(loadSession(dir, groupA, "manager")?.instance_token).toBe("t".repeat(64));
+});
