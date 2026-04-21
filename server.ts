@@ -634,6 +634,19 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       if (!targetSession) {
         return { content: [{ type: "text" as const, text: `No local session found for peer ${id}` }], isError: true };
       }
+      // Defense in depth: after the file-name scheme change loadSession cannot
+      // return a foreign-group session, but keep an explicit check in case a
+      // legacy/corrupt file leaks through migration.
+      if (targetSession.group_id !== GROUP_ID) {
+        deleteSession(SESSION_DIR, targetSession.group_id, targetSession.peer_id);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Session file for peer ${id} belongs to a different group; removed. Re-register if needed.`,
+          }],
+          isError: true,
+        };
+      }
       try {
         const res = await fetch(`${BROKER_URL}/resume`, {
           method: "POST",
