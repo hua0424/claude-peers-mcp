@@ -32,7 +32,7 @@ import {
   getRecentFiles,
 } from "./shared/summarize.ts";
 import { hostname } from "node:os";
-import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions } from "./shared/session.ts";
+import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions, migrateSessionFiles } from "./shared/session.ts";
 import { deriveGroupId, isValidPeerId } from "./shared/auth.ts";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
@@ -244,13 +244,13 @@ function scheduleReconnect() {
             log("Token invalid, re-registering...");
             const oldId401 = myId;
             await register(currentSummary || initialSummary);
-            if (oldId401) deleteSession(SESSION_DIR, oldId401);
+            if (oldId401) deleteSession(SESSION_DIR, GROUP_ID, oldId401);
             wsFailCount = 0;
           } else if (res.status === 409) {
             log("Session taken by another connection, re-registering...");
             const oldId409 = myId;
             await register(currentSummary || initialSummary);
-            if (oldId409) deleteSession(SESSION_DIR, oldId409);
+            if (oldId409) deleteSession(SESSION_DIR, GROUP_ID, oldId409);
             wsFailCount = 0;
           } else {
             log(`Resume returned unexpected status ${res.status}, will retry later`);
@@ -617,7 +617,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         }
         const oldId = myId;
         myId = result.id;
-        deleteSession(SESSION_DIR, oldId);
+        deleteSession(SESSION_DIR, GROUP_ID, oldId);
         saveCurrentSession();
         return { content: [{ type: "text" as const, text: `ID changed from ${oldId} to ${myId}` }] };
       } catch (e) {
@@ -630,9 +630,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       if (!isValidPeerId(id)) {
         return { content: [{ type: "text" as const, text: `Invalid peer ID format: "${id}"` }], isError: true };
       }
-      const targetSession = loadSession(SESSION_DIR, id);
+      const targetSession = loadSession(SESSION_DIR, GROUP_ID, id);
       if (!targetSession) {
         return { content: [{ type: "text" as const, text: `No local session found for peer ${id}` }], isError: true };
+      }
+      // Defense in depth: after the file-name scheme change loadSession cannot
+      // return a foreign-group session, but keep an explicit check in case a
+      // legacy/corrupt file leaks through migration.
+      if (targetSession.group_id !== GROUP_ID) {
+        deleteSession(SESSION_DIR, GROUP_ID, id);
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Session file for peer ${id} belongs to a different group; removed. Re-register if needed.`,
+          }],
+          isError: true,
+        };
       }
       try {
         const res = await fetch(`${BROKER_URL}/resume`, {
@@ -656,7 +669,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         // the WS idle timeout (120s) or the 24-hour stale cleanup evicts it.
         if (myToken) {
           try { await brokerFetch("/unregister", {}); } catch (e) { log(`Failed to unregister current session: ${e instanceof Error ? e.message : String(e)}`); }
-          if (myId) deleteSession(SESSION_DIR, myId);
+          if (myId) deleteSession(SESSION_DIR, GROUP_ID, myId);
         }
         // Cancel any in-flight reconnect before switching identity
         if (reconnectTimer) {
@@ -674,7 +687,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         currentSummary = targetSession.summary || "";
         // Remove the old session file for the target identity before writing the new one,
         // so scanSessions never sees two files for the same peer on next startup.
-        deleteSession(SESSION_DIR, targetSession.peer_id);
+        deleteSession(SESSION_DIR, GROUP_ID, id);
         saveCurrentSession();
         // Reconnect WS with new token
         if (ws) ws.close(1000, "Switching identity");
@@ -821,13 +834,14 @@ ${roleBlocks}
 
 async function tryResumeSession(): Promise<boolean> {
   cleanupStaleSessions(SESSION_DIR, SESSION_CLEANUP_AGE_DAYS);
+  migrateSessionFiles(SESSION_DIR);
   const sessions = scanSessions(SESSION_DIR, myCwd, GROUP_ID, myHostname);
 
   for (const session of sessions) {
     // Skip sessions with malformed tokens (e.g. corrupted files) before hitting the network
     if (!/^[0-9a-f]{64}$/.test(session.instance_token)) {
       log(`Session ${session.peer_id} has invalid token format, removing`);
-      deleteSession(SESSION_DIR, session.peer_id);
+      deleteSession(SESSION_DIR, GROUP_ID, session.peer_id);
       continue;
     }
     try {
@@ -858,7 +872,7 @@ async function tryResumeSession(): Promise<boolean> {
 
       if (res.status === 401) {
         log(`Session ${session.peer_id} token invalid, removing stale file`);
-        deleteSession(SESSION_DIR, session.peer_id);
+        deleteSession(SESSION_DIR, GROUP_ID, session.peer_id);
         continue;
       }
 
