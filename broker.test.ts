@@ -705,7 +705,7 @@ test("resume succeeds for dormant peer (WS disconnect)", async () => {
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: "resume-group", instance_token: peer.instance_token }),
   });
   expect(resumeRes.ok).toBe(true);
   const resumed = await resumeRes.json() as { id: string; instance_token: string };
@@ -735,7 +735,7 @@ test("resume fails after explicit unregister (token rotated)", async () => {
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: "resume-unregister-group", instance_token: peer.instance_token }),
   });
   expect(resumeRes.status).toBe(401);
 });
@@ -767,7 +767,7 @@ test("resume fails with active WS connection", async () => {
   const resumeRes = await fetch(`${BASE_URL}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: TEST_API_KEY, instance_token: peer.instance_token }),
+    body: JSON.stringify({ api_key: TEST_API_KEY, group_secret: "resume-ws-group", instance_token: peer.instance_token }),
   });
   expect(resumeRes.status).toBe(409);
 
