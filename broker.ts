@@ -603,12 +603,21 @@ function handleResume(body: ResumeRequest): { id: string; instance_token: string
   if (!body.api_key || typeof body.api_key !== "string" || !verifyApiKey(body.api_key)) {
     return { error: "Invalid API key", status: 401 };
   }
+  if (!body.group_secret || typeof body.group_secret !== "string") {
+    return { error: "Missing or invalid group_secret", status: 400 };
+  }
   if (!body.instance_token || typeof body.instance_token !== "string" || body.instance_token.length !== 64) {
     return { error: "Missing or invalid instance_token", status: 400 };
   }
   const peer = selectPeerByToken.get(body.instance_token) as Peer | null;
   if (!peer) {
     return { error: "Invalid token", status: 401 };
+  }
+  // Group check — the historical bug was that a token from one group could resume
+  // into that peer from any caller; we now require the caller to prove group membership.
+  const expectedGroupId = deriveGroupId(body.group_secret);
+  if (peer.group_id !== expectedGroupId) {
+    return { error: "Token belongs to a different group", status: 401 };
   }
   // Reject if already active (either with or without a WS connection)
   if (peer.status === "active") {

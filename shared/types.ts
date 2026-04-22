@@ -65,6 +65,7 @@ export interface UnregisterRequest {
 
 export interface ResumeRequest {
   api_key: string;
+  group_secret: string;
   instance_token: string;
 }
 
