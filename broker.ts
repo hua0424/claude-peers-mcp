@@ -342,11 +342,11 @@ const updateGroupDoc = db.prepare(`
 `);
 
 const selectAllGroupsWithCounts = db.prepare(`
-  SELECT g.group_id, g.created_at,
+  SELECT g.group_id, g.group_secret, g.created_at,
          COUNT(CASE WHEN p.status = 'active' THEN 1 END) AS active_peers
   FROM groups g
   LEFT JOIN peers p ON p.group_id = g.group_id
-  GROUP BY g.group_id, g.created_at
+  GROUP BY g.group_id, g.group_secret, g.created_at
 `);
 
 // --- WebSocket connection pool (keyed by instance_token) ---
@@ -889,10 +889,17 @@ Bun.serve<WsData>({
       }
       const groups = selectAllGroupsWithCounts.all() as Array<{
         group_id: string;
+        group_secret: string | null;
         created_at: string;
         active_peers: number;
       }>;
-      return Response.json(groups);
+      const result = groups.map((g) => ({
+        group_id: g.group_id,
+        group_secret: g.group_secret ?? "(unknown)",
+        created_at: g.created_at,
+        active_peers: g.active_peers,
+      }));
+      return Response.json(result);
     }
 
     if (req.method !== "POST") {
