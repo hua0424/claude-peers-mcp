@@ -229,7 +229,7 @@ function scheduleReconnect() {
           const res = await fetch(`${BROKER_URL}/resume`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ api_key: API_KEY, instance_token: myToken }),
+            body: JSON.stringify({ api_key: API_KEY, group_secret: GROUP_SECRET, instance_token: myToken }),
             signal: AbortSignal.timeout(10000),
           });
           if (res.ok) {
@@ -651,7 +651,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         const res = await fetch(`${BROKER_URL}/resume`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_key: API_KEY, instance_token: targetSession.instance_token }),
+          body: JSON.stringify({ api_key: API_KEY, group_secret: GROUP_SECRET, instance_token: targetSession.instance_token }),
           signal: AbortSignal.timeout(10000),
         });
         const resumeData = await res.json() as { id?: string; instance_token?: string; role?: string; error?: string };
@@ -848,7 +848,7 @@ async function tryResumeSession(): Promise<boolean> {
       const res = await fetch(`${BROKER_URL}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: API_KEY, instance_token: session.instance_token }),
+        body: JSON.stringify({ api_key: API_KEY, group_secret: GROUP_SECRET, instance_token: session.instance_token }),
         signal: AbortSignal.timeout(10000),
       });
 
