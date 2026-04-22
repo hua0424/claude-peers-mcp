@@ -41,3 +41,4 @@ graphify-out/
 
 # Claude Code local config (personal agents, settings)
 .claude/
+.worktrees/
