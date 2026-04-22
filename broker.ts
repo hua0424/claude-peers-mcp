@@ -59,7 +59,8 @@ db.run(`
   CREATE TABLE IF NOT EXISTS groups (
     group_id TEXT PRIMARY KEY,
     group_secret_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    group_secret TEXT
   )
 `);
 
@@ -197,6 +198,14 @@ try {
     db.run("DELETE FROM peers");
     db.run("DELETE FROM groups");
     console.error("[claude-peers broker] Cleared. All peers will re-register automatically.");
+  }
+}
+
+// Migration: add group_secret column to groups table if missing
+{
+  const groupCols = db.query("PRAGMA table_info(groups)").all() as Array<{ name: string }>;
+  if (!groupCols.some((c) => c.name === "group_secret")) {
+    db.run("ALTER TABLE groups ADD COLUMN group_secret TEXT");
   }
 }
 
