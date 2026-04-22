@@ -212,6 +212,7 @@ switch (cmd) {
       if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
       const groups = await res.json() as Array<{
         group_id: string;
+        group_secret: string;
         created_at: string;
         active_peers: number;
       }>;
@@ -220,7 +221,7 @@ switch (cmd) {
       } else {
         console.log(`${groups.length} group(s):`);
         for (const g of groups) {
-          console.log(`  ${g.group_id}  peers=${g.active_peers}  created=${g.created_at}`);
+          console.log(`  ${g.group_secret}  peers=${g.active_peers}  created=${g.created_at}`);
         }
       }
     } catch (e) {
