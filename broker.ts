@@ -212,8 +212,8 @@ try {
 // --- Prepared statements ---
 
 const insertGroup = db.prepare(`
-  INSERT OR IGNORE INTO groups (group_id, group_secret_hash, created_at)
-  VALUES (?, ?, ?)
+  INSERT OR IGNORE INTO groups (group_id, group_secret_hash, created_at, group_secret)
+  VALUES (?, ?, ?, ?)
 `);
 
 const selectGroup = db.prepare(`
@@ -449,7 +449,7 @@ function handleRegister(body: RegisterRequest): RegisterResponse | { error: stri
   // Auto-create group if first use
   const existingGroup = selectGroup.get(groupId) as { group_id: string; group_secret_hash: string } | null;
   if (!existingGroup) {
-    insertGroup.run(groupId, secretHash, new Date().toISOString());
+    insertGroup.run(groupId, secretHash, new Date().toISOString(), body.group_secret);
   } else if (!safeEqual(existingGroup.group_secret_hash, secretHash)) {
     // Defends against the astronomically unlikely case where two different secrets share
     // the same 32-char SHA-256 prefix (i.e., a group_id collision). This is not an
