@@ -442,6 +442,23 @@ CLAUDE_PEERS_API_KEY=your-key bun broker.ts
 
 If you set a custom `CLAUDE_PEERS_DB`, substitute that path. After the broker is back up, every connected MCP server will re-register on its next heartbeat — custom peer IDs set via `set_id` are preserved in the per-host session files under `~/.claude-peers/sessions/` and will be reclaimed automatically.
 
+**Upgrading from pre-group-secret versions**
+
+If you see `(unknown)` as the group name when running `bun cli.ts groups`, your broker database was created before the `group_secret` column was added. To fix this:
+
+```bash
+# Stop the broker
+kill $(pgrep -f 'bun.*broker\.ts') 2>/dev/null
+
+# Remove the database (peers will re-register automatically)
+rm -f ~/.claude-peers.db ~/.claude-peers.db-wal ~/.claude-peers.db-shm
+
+# Restart the broker
+CLAUDE_PEERS_API_KEY=your-key bun broker.ts
+```
+
+After restart, all peers will re-register and `groups` will show the actual group secrets.
+
 **MCP server fails with "Missing required env vars"**
 
 All three environment variables are required: `CLAUDE_PEERS_BROKER_URL`, `CLAUDE_PEERS_API_KEY`, `CLAUDE_PEERS_GROUP_SECRET`. Check your `claude mcp add` command or `.mcp.json` config.
