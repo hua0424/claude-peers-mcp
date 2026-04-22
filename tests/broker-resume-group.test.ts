@@ -158,3 +158,60 @@ test("/resume with empty group_secret returns 400", async () => {
   });
   expect(res.status).toBe(400);
 });
+
+import { writeFileSync, readdirSync, mkdirSync } from "node:fs";
+
+test("tryResumeSession-style flow: scan → /resume 401 → delete file → fresh register", async () => {
+  // Simulate the historical scenario:
+  // Seed: register in group A, DO NOT unregister (so token IS valid & peer.group_id = A).
+  // As a group B client, call /resume with that token → should get 401 "different group".
+  // Then simulate the client-side deletion by calling deleteSession semantics.
+  const sessionDir = mkdtempSync(join(tmpdir(), "claude-peers-selfheal-"));
+
+  const peerA = await registerPeer(SECRET_A, "historical");
+  const { deriveGroupId } = await import("../shared/auth.ts");
+  const groupAId = deriveGroupId(SECRET_A);
+  const groupBId = deriveGroupId(SECRET_B);
+
+  // Write a "toxic" session file that claims group B in filename but holds A's token.
+  // (We don't need to fake the filename, just the content; scanSessions logic isn't tested here.)
+  const fileName = `${groupBId}_historical.json`;
+  const filePath = join(sessionDir, fileName);
+  writeFileSync(filePath, JSON.stringify({
+    peer_id: "historical",
+    instance_token: peerA.instance_token,
+    cwd: "/tmp/historical",
+    group_id: groupBId,
+    hostname: hostname(),
+  }));
+
+  // Group B client attempts /resume with the toxic token.
+  const resumeRes = await fetch(`${url}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: API_KEY,
+      group_secret: SECRET_B,
+      instance_token: peerA.instance_token,
+    }),
+  });
+  expect(resumeRes.status).toBe(401);
+  const body = (await resumeRes.json()) as { error: string };
+  expect(body.error).toContain("different group");
+
+  // Client response: delete the toxic file (mirroring tryResumeSession's 401 branch).
+  const { deleteSession } = await import("../shared/session.ts");
+  deleteSession(sessionDir, groupBId, "historical");
+  expect(readdirSync(sessionDir)).toEqual([]);
+
+  // Client proceeds to fresh /register in group B — this succeeds with a brand-new peer.
+  const peerB = await registerPeer(SECRET_B, "historical");
+  expect(peerB.id).toBeDefined();
+  expect(peerB.instance_token).toHaveLength(64);
+  expect(peerB.instance_token).not.toBe(peerA.instance_token); // new token, not the toxic one
+
+  // Cleanup
+  await unregisterPeer(peerA.instance_token);
+  await unregisterPeer(peerB.instance_token);
+  rmSync(sessionDir, { recursive: true, force: true });
+});
