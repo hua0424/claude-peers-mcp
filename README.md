@@ -292,6 +292,33 @@ bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret --group-secret myg
 bun cli.ts --broker-url http://10.0.0.5:7899 --api-key secret kill-broker
 ```
 
+## Skills (Quick Access)
+
+For direct, deterministic access to claude-peers tools without natural-language prompting, install the `/peers` skill:
+
+```bash
+# Copy the skill to your personal skills directory
+cp -r .claude/skills/peers ~/.claude/skills/
+
+# Restart Claude Code to pick up the new skill
+```
+
+Then use `/peers <action>` in any Claude Code session:
+
+```
+/peers whoami              # Show your peer ID, role, summary
+/peers list               # List peers in your group
+/peers list repo          # List peers in same git repo
+/peers send alice hello   # Send a message to peer "alice"
+/peers set-id my-bot      # Set your peer ID
+/peers set-summary "fixing auth bug"
+/peers check              # Check for new messages
+/peers doc-get            # Get group documentation
+/peers doc-gen            # Generate group doc template
+```
+
+The skill has `disable-model-invocation: true`, so it only triggers when you explicitly type `/peers` — Claude will never auto-invoke it.
+
 ## MCP Tools (new in this version)
 
 | Tool | Description |
