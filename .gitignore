@@ -40,5 +40,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 graphify-out/
 
 # Claude Code local config (personal agents, settings)
-.claude/
+.claude/*
+!.claude/skills/
 .worktrees/
