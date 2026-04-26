@@ -31,7 +31,7 @@ import {
   getGitBranch,
   getRecentFiles,
 } from "./shared/summarize.ts";
-import { hostname } from "node:os";
+import { hostname, homedir } from "node:os";
 import { saveSession, loadSession, scanSessions, deleteSession, cleanupStaleSessions, migrateSessionFiles } from "./shared/session.ts";
 import { deriveGroupId, isValidPeerId } from "./shared/auth.ts";
 import { join } from "node:path";
@@ -50,7 +50,7 @@ if (!BROKER_URL || !API_KEY || !GROUP_SECRET) {
   process.exit(1);
 }
 
-const SESSION_DIR = join(process.env.HOME ?? "/tmp", ".claude-peers", "sessions");
+const SESSION_DIR = join(homedir(), ".claude-peers", "sessions");
 const GROUP_ID = deriveGroupId(GROUP_SECRET!);
 // Session files older than this are removed on startup. Should be >= broker's STALE_PEER_TTL (24h).
 const SESSION_CLEANUP_AGE_DAYS = 7;
