@@ -1076,7 +1076,7 @@ Bun.serve<WsData>({
       console.error(`[claude-peers broker] WS disconnected: ${instanceToken?.slice(0, 8) ?? "(unauthenticated)"}...`);
     },
 
-    idleTimeout: 120,
+    idleTimeout: 600,
     sendPings: true,
   },
 });
