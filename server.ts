@@ -704,6 +704,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "whoami": {
+      const wsConnected = ws !== null && ws.readyState === WebSocket.OPEN;
       return {
         content: [{
           type: "text" as const,
@@ -713,6 +714,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             `Summary: ${currentSummary || "(none)"}`,
             `CWD:     ${myCwd}`,
             `Host:    ${myHostname}`,
+            `WS:      ${wsConnected ? "connected" : "disconnected (stdio only)"}`,
           ].join("\n"),
         }],
       };
