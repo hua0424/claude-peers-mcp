@@ -81,6 +81,7 @@ let myCwd = process.cwd();
 let myGitRoot: string | null = null;
 let myHostname = hostname();
 let ws: WebSocket | null = null;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 1000;
 let wsFailCount = 0;
@@ -169,6 +170,9 @@ function connectWebSocket() {
     log("WebSocket connected, auth sent");
     reconnectDelay = 1000; // reset backoff on success
     wsFailCount = 0;
+    heartbeatTimer = setInterval(() => {
+      try { socket.ping(); } catch { /* onclose will fire */ }
+    }, 30_000);
   };
 
   socket.onmessage = async (event) => {
@@ -203,6 +207,7 @@ function connectWebSocket() {
   };
 
   socket.onclose = (event) => {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (ws === socket) ws = null;
     if ((event as CloseEvent).code === 1000) {
       // Intentional close (cleanup, switch_id) — caller manages reconnect
