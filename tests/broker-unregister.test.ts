@@ -108,6 +108,18 @@ async function unregister(token: string) {
   expect(res.status).toBe(200);
 }
 
+async function disconnect(token: string) {
+  const res = await fetch(`${brokerUrl}/disconnect`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: "{}",
+  });
+  expect(res.status).toBe(200);
+}
+
 test("set_id to a just-unregistered peer's ID succeeds (clean exit path)", async () => {
   const a = await register(10001);
   const setA = await setId(a.instance_token, "alice");
@@ -172,4 +184,54 @@ test("set_id reclaims a dormant peer's ID (crash-exit path)", async () => {
   expect(bodyB.id).toBe("carol");
 
   await unregister(b.instance_token);
+});
+
+test("/disconnect sets peer to dormant and allows /resume (unlike /unregister)", async () => {
+  const a = await register(20001);
+  const setIdA = await setId(a.instance_token, "dave");
+  expect(setIdA.status).toBe(200);
+
+  // Disconnect (not unregister) — peer should become dormant, row preserved
+  await disconnect(a.instance_token);
+
+  // /resume should succeed because the peer row still exists
+  const resumeRes = await fetch(`${brokerUrl}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: API_KEY,
+      group_secret: GROUP_SECRET,
+      instance_token: a.instance_token,
+    }),
+  });
+  expect(resumeRes.status).toBe(200);
+  const resumeData = await resumeRes.json() as { id: string; instance_token: string };
+  expect(resumeData.id).toBe("dave");
+  expect(resumeData.instance_token).not.toBe(a.instance_token); // token rotated
+
+  // Clean up — unregister to release the ID
+  const unreg = await fetch(`${brokerUrl}/unregister`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${resumeData.instance_token}`,
+    },
+    body: "{}",
+  });
+  expect(unreg.status).toBe(200);
+});
+
+test("/disconnect dormant peer's ID can be reclaimed by set_id (crash-exit path)", async () => {
+  const a = await register(20002);
+  const setIdA = await setId(a.instance_token, "eve");
+  expect(setIdA.status).toBe(200);
+
+  await disconnect(a.instance_token);
+
+  // Another peer tries to claim "eve" — dormant peer is reclaimed, so it succeeds
+  const b = await register(20003);
+  const setB = await setId(b.instance_token, "eve");
+  expect(setB.status).toBe(200);
+
+  await unregister(b.instance_token); // clean up the new "eve"
 });
