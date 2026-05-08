@@ -963,13 +963,13 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
-    // Unregister first (while peer is still active), then close WS.
-    // Reversing the order would cause /unregister to fail because the WS close
-    // handler sets the peer to dormant before the HTTP call completes.
+    // Notify broker of clean disconnect, preserving the peer row as dormant
+    // for future /resume. Uses HTTP (not WS close frame) to avoid race with
+    // process.exit() killing the process before the frame reaches the broker.
     if (myToken) {
       try {
-        await brokerFetch("/unregister", {});
-        log("Unregistered from broker");
+        await brokerFetch("/disconnect", {});
+        log("Disconnected from broker");
       } catch { /* Best effort */ }
     }
     const activeWs = ws;

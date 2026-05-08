@@ -608,6 +608,16 @@ function handleUnregister(callerPeer: Peer): void {
   if (peerWs) peerWs.close(4000, "Peer unregistered");
 }
 
+function handleDisconnect(callerPeer: Peer): void {
+  // Set peer to dormant without deleting the row — preserves identity for
+  // future /resume. Unlike /unregister (which deletes the row), /disconnect
+  // is for clean client shutdown where the peer intends to reconnect later.
+  updatePeerStatus.run("dormant", new Date().toISOString(), callerPeer.instance_token);
+  const peerWs = wsPool.get(callerPeer.instance_token);
+  wsPool.delete(callerPeer.instance_token);
+  if (peerWs) peerWs.close(4000, "Peer disconnected");
+}
+
 function handleResume(body: ResumeRequest): { id: string; instance_token: string } | { error: string; status: number } {
   if (!body.api_key || typeof body.api_key !== "string" || !verifyApiKey(body.api_key)) {
     return { error: "Invalid API key", status: 401 };
@@ -963,6 +973,9 @@ Bun.serve<WsData>({
           case "/unregister":
             handleUnregister(callerPeer);
             return Response.json({ ok: true });
+          case "/disconnect":
+            handleDisconnect(callerPeer);
+            return Response.json({ ok: true });
           case "/set-id": {
             const result = handleSetId(body as SetIdRequest, callerPeer);
             if ("error" in result) {
@@ -1043,6 +1056,7 @@ Bun.serve<WsData>({
             existingWs.close(4000, "Replaced by new connection");
           }
           wsPool.set(peer.instance_token, ws);
+          updateLastSeen.run(new Date().toISOString(), peer.instance_token);
           // Confirm authentication to client
           ws.send(JSON.stringify({ type: "auth_ok", id: peer.id }));
           // Deliver any queued messages
