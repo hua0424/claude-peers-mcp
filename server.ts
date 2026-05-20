@@ -53,7 +53,9 @@ if (!BROKER_URL || !API_KEY || !GROUP_SECRET) {
 const SESSION_DIR = join(homedir(), ".claude-peers", "sessions");
 const GROUP_ID = deriveGroupId(GROUP_SECRET!);
 // Session files older than this are removed on startup. Should be >= broker's STALE_PEER_TTL (24h).
-const SESSION_CLEANUP_AGE_DAYS = 7;
+// 15 days keeps identity recoverable via tryReclaimId across long offline gaps
+// (e.g. holidays, business trips) even after broker reaps the dormant peer row at 24h.
+const SESSION_CLEANUP_AGE_DAYS = 15;
 mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 });
 
 // Derive WS URL from HTTP URL (normalise protocol regardless of case)
