@@ -10,7 +10,7 @@
 - [x] Phase 1：broker 端修复 (developer)
 - [x] Phase 2：server 端身份恢复 (developer)
 - [x] Phase 3：自动化测试 (developer)
-- [ ] Phase 4：code review (manager)
+- [x] Phase 4：code review (manager)
 - [ ] Phase 5：手工集成测试 (tester)
 - [ ] Phase 6：回归与合并 (manager)
 
@@ -67,9 +67,9 @@
 
 | 步骤 | 责任人 | 状态 | 备注 |
 |------|--------|------|------|
-| 4.1 阅读 diff，重点检查：SQL 条件正确性、复位逻辑顺序、tryReclaimId 边界 | manager | ⬜ | |
-| 4.2 在 `doc/review/2026-05-XX-stale-cleanup-review.md` 记录 review 意见（如有） | manager | ⬜ | 若无意见可直接批 |
-| 4.3 批准后通过 `send_message` 通知 tester | manager | ⬜ | |
+| 4.1 阅读 diff，重点检查：SQL 条件正确性、复位逻辑顺序、tryReclaimId 边界 | manager | ✅ | 见 review 文档 |
+| 4.2 在 `doc/review/2026-05-20-stale-cleanup-review.md` 记录 review 意见 | manager | ✅ | R1 必修 + R2/R3 不阻塞 |
+| 4.3 批准后通过 `send_message` 通知 tester | manager | ✅ | R1 由 `1cdef76` 修复，已通知 tester 启动 Phase 5 |
 
 ## Phase 5 — 手工集成测试
 
@@ -78,12 +78,12 @@
 
 | 步骤 | 责任人 | 状态 | 备注 |
 |------|--------|------|------|
-| 5.1 长 idle 不被清理（缩小 TTL 验证） | tester | ⬜ | |
-| 5.2 broker 重启不抢身份 | tester | ⬜ | |
-| 5.3 dormant 过期回收后 tryReclaimId | tester | ⬜ | |
-| 5.4 ID 被占用时不抢，回退到随机 ID | tester | ⬜ | |
-| 5.5 写测试报告 `doc/test/2026-05-XX-stale-cleanup-test-report.md` | tester | ⬜ | |
-| 5.6 `send_message` 把报告路径发给 manager | tester | ⬜ | |
+| 5.1 长 idle 不被清理（缩小 TTL 验证） | tester | ✅ | active peer 经过 TTL 仍存活 |
+| 5.2 broker 重启不抢身份 | tester | ✅ | phantom active→dormant，tryReclaimId 恢复 ID |
+| 5.3 dormant 过期回收后 tryReclaimId | tester | ✅ | dormant→cleanStale 删除→register→reclaim 成功 |
+| 5.4 ID 被占用时不抢，回退到随机 ID | tester | ✅ | 409 拒绝 reclaim，peer 保留随机 ID 不报错 |
+| 5.5 写测试报告 `doc/test/2026-05-20-stale-cleanup-test-report.md` | tester | ✅ | |
+| 5.6 `send_message` 把报告路径发给 manager | tester | ✅ | |
 
 ## Phase 6 — 回归与合并
 
@@ -102,7 +102,12 @@
 |------|----------------|------|
 | 2026-05-18 | user → manager | 报告周末 idle 后 peer 消失、ID 变随机 |
 | 2026-05-18 | manager → user | 根因分析 + 方案 A/B/C/D 设计，获认可 |
-| | | |
+| 2026-05-20 | manager → developer | 派发任务，附设计与跟踪文档 |
+| 2026-05-20 | developer → manager | Phase 1/2/3 完成，3 个 commit 待 review |
+| 2026-05-20 | manager → developer | Review 反馈：R1 必修 + R2/R3 不阻塞 |
+| 2026-05-20 | developer → manager | R1 修复完成 (`1cdef76`)，请复审 |
+| 2026-05-20 | manager → developer | 复审通过，闭环本轮迭代 |
+| 2026-05-20 | manager → tester | 派发 Phase 5 手工集成测试任务 |
 
 ## 决策记录
 
