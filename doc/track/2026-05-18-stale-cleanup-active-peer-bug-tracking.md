@@ -58,7 +58,7 @@
 | 3.1 `broker.test.ts`：`cleanStale does not delete active peers` | developer | ✅ | tests/broker-stale-cleanup.test.ts |
 | 3.2 `broker.test.ts`：`cleanStale deletes dormant peers past TTL` | developer | ✅ | tests/broker-stale-cleanup.test.ts |
 | 3.3 `broker.test.ts`：`startup resets active to dormant` | developer | ✅ | tests/broker-stale-cleanup.test.ts |
-| 3.4 集成测试：401 后客户端尝试夺回原 ID | developer | ✅ | broker.test.ts: reclaim after unregister |
+| 3.4 集成测试：401 后客户端尝试夺回原 ID | developer | ✅ | 通过服务端能力测试（broker.test.ts: reclaim after unregister）+ tester Phase 5.3/5.4 手工覆盖完整链路 |
 | 3.5 `bun test` 全绿（73+ 用例全过） | developer | ✅ | 79 pass / 0 fail |
 
 ## Phase 4 — Code Review

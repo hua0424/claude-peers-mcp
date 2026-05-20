@@ -227,11 +227,16 @@ function connectWebSocket() {
 
 async function tryReclaimId(oldId: string | null): Promise<void> {
   if (!oldId || oldId === myId) return;
+  const randomId = myId; // capture register()'s random ID before we overwrite it
   try {
     const r = await brokerFetch<{ id: string }>("/set-id", { new_id: oldId });
     if (r.id === oldId) {
       myId = oldId;
       saveCurrentSession();
+      // Remove the random ID session file left by register()
+      if (randomId && randomId !== oldId) {
+        deleteSession(SESSION_DIR, GROUP_ID, randomId);
+      }
       log(`Reclaimed original ID: ${oldId}`);
       return;
     }
