@@ -171,6 +171,9 @@ function connectWebSocket() {
     reconnectDelay = 1000; // reset backoff on success
     wsFailCount = 0;
     heartbeatTimer = setInterval(() => {
+      // Bun's WebSocket client exposes .ping(); standard Web WebSocket does not.
+      // Even if this throws (e.g. under Node), keepalive is still maintained by
+      // the broker's sendPings: true (server pings, browser/Bun auto-pongs).
       try { socket.ping(); } catch { /* onclose will fire */ }
     }, 30_000);
   };
@@ -222,6 +225,23 @@ function connectWebSocket() {
   };
 }
 
+async function tryReclaimId(oldId: string | null): Promise<void> {
+  if (!oldId || oldId === myId) return;
+  try {
+    const r = await brokerFetch<{ id: string }>("/set-id", { new_id: oldId });
+    if (r.id === oldId) {
+      myId = oldId;
+      saveCurrentSession();
+      log(`Reclaimed original ID: ${oldId}`);
+      return;
+    }
+  } catch (e) {
+    log(`Could not reclaim original ID ${oldId}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // Failed to reclaim — remove stale session file so next startup doesn't try the old ID again
+  deleteSession(SESSION_DIR, GROUP_ID, oldId);
+}
+
 function scheduleReconnect() {
   if (reconnectTimer) return;
   wsFailCount = Math.min(wsFailCount + 1, RE_REGISTER_AFTER_FAILURES + 1);
@@ -247,15 +267,15 @@ function scheduleReconnect() {
             wsFailCount = 0;
           } else if (res.status === 401) {
             log("Token invalid, re-registering...");
-            const oldId401 = myId;
+            const oldId = myId;
             await register(currentSummary || initialSummary);
-            if (oldId401) deleteSession(SESSION_DIR, GROUP_ID, oldId401);
+            await tryReclaimId(oldId);
             wsFailCount = 0;
           } else if (res.status === 409) {
             log("Session taken by another connection, re-registering...");
-            const oldId409 = myId;
+            const oldId = myId;
             await register(currentSummary || initialSummary);
-            if (oldId409) deleteSession(SESSION_DIR, GROUP_ID, oldId409);
+            await tryReclaimId(oldId);
             wsFailCount = 0;
           } else {
             log(`Resume returned unexpected status ${res.status}, will retry later`);

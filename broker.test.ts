@@ -158,7 +158,7 @@ test("migrates v1 peers table (has instance_token + group_id) and carries rows o
     verify.close();
     expect(row).not.toBeNull();
     expect(row?.instance_token.length).toBe(64);
-    expect(row?.status).toBe("active");
+    expect(row?.status).toBe("dormant"); // startup reset turns phantom active → dormant
   } finally {
     try { unlinkSync(dbPath); } catch {}
   }
@@ -996,6 +996,53 @@ test("pushUndeliveredMessages delivers queued messages on WS auth", async () => 
   expect(pushedMessages).toHaveLength(1);
   expect(pushedMessages[0]).toBe("pushed-offline");
   ws.close();
+});
+
+test("set-id allows reclaiming ID after peer is fully deleted", async () => {
+  const reg1 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "reclaim-group",
+      pid: 50001, hostname: "h", cwd: "/r", git_root: null, summary: "",
+    }),
+  });
+  const peer1 = await reg1.json() as { id: string; instance_token: string };
+
+  // Set custom ID
+  await fetch(`${BASE_URL}/set-id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer1.instance_token}` },
+    body: JSON.stringify({ new_id: "reclaimable" }),
+  });
+
+  // Unregister (fully deletes the peer row)
+  await fetch(`${BASE_URL}/unregister`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer1.instance_token}` },
+    body: JSON.stringify({}),
+  });
+
+  // Register new peer
+  const reg2 = await fetch(`${BASE_URL}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: TEST_API_KEY, group_secret: "reclaim-group",
+      pid: 50002, hostname: "h", cwd: "/r2", git_root: null, summary: "",
+    }),
+  });
+  const peer2 = await reg2.json() as { id: string; instance_token: string };
+
+  // Reclaim the ID
+  const setRes = await fetch(`${BASE_URL}/set-id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${peer2.instance_token}` },
+    body: JSON.stringify({ new_id: "reclaimable" }),
+  });
+  expect(setRes.status).toBe(200);
+  const data = await setRes.json() as { id: string };
+  expect(data.id).toBe("reclaimable");
 });
 
 test("dormant peers are excluded from list-peers", async () => {
