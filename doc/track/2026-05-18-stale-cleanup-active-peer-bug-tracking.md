@@ -11,8 +11,8 @@
 - [x] Phase 2：server 端身份恢复 (developer)
 - [x] Phase 3：自动化测试 (developer)
 - [x] Phase 4：code review (manager)
-- [ ] Phase 5：手工集成测试 (tester)
-- [ ] Phase 6：回归与合并 (manager)
+- [x] Phase 5：手工集成测试 (tester)
+- [x] Phase 6：回归与合并 (manager)
 
 ## Phase 0 — 需求与方案确认 ✅
 
@@ -91,10 +91,10 @@
 
 | 步骤 | 责任人 | 状态 | 备注 |
 |------|--------|------|------|
-| 6.1 确认测试报告中 4 个场景全部 PASS | manager | ⬜ | |
-| 6.2 决定合并到 main / 是否需要 hotfix 分支 | manager | ⬜ | |
-| 6.3 合并后通知 developer + tester | manager | ⬜ | |
-| 6.4 向用户汇报修复完成 | manager | ⬜ | |
+| 6.1 确认测试报告中 4 个场景全部 PASS | manager | ✅ | `doc/test/2026-05-20-stale-cleanup-test-report.md` 4/4 PASS |
+| 6.2 决定合并到 main / 是否需要 hotfix 分支 | manager | ✅ | 用户授权 fast-forward；本任务 4 commits + 2 docs/chore commits 已 ff 至 main (`ad761ae`) |
+| 6.3 合并后通知 developer + tester | manager | ✅ | 见沟通记录 |
+| 6.4 向用户汇报修复完成 | manager | ✅ | 见本次会话汇报 |
 
 ## 沟通记录
 
@@ -108,6 +108,10 @@
 | 2026-05-20 | developer → manager | R1 修复完成 (`1cdef76`)，请复审 |
 | 2026-05-20 | manager → developer | 复审通过，闭环本轮迭代 |
 | 2026-05-20 | manager → tester | 派发 Phase 5 手工集成测试任务 |
+| 2026-05-20 | tester → manager | Phase 5 4/4 PASS，报告路径 `doc/test/2026-05-20-stale-cleanup-test-report.md` |
+| 2026-05-20 | manager → user | 提交合并方式与杂项处理决策（fast-forward + 杂项 chore commit）|
+| 2026-05-20 | manager → developer/tester | 合并完成，本期任务闭环 |
+| 2026-05-20 | manager → user | 汇报全流程完成 |
 
 ## 决策记录
 
