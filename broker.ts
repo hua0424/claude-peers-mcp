@@ -297,7 +297,7 @@ const STALE_PEER_TTL_MS = 24 * 60 * 60 * 1000;         // 24 hours
 const MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
 
 const deleteStalePeers = db.prepare(`
-  DELETE FROM peers WHERE last_seen < ?
+  DELETE FROM peers WHERE last_seen < ? AND status = 'dormant'
 `);
 
 const updatePeerStatus = db.prepare(`
@@ -314,7 +314,7 @@ const updateInstanceToken = db.prepare(`
 `);
 
 const selectStalePeers = db.prepare(`
-  SELECT instance_token FROM peers WHERE last_seen < ?
+  SELECT instance_token FROM peers WHERE last_seen < ? AND status = 'dormant'
 `);
 
 const updateMessageFromId = db.prepare(`
@@ -384,20 +384,6 @@ function cleanStale() {
   // Remove groups that have no remaining peers
   db.run("DELETE FROM groups WHERE group_id NOT IN (SELECT DISTINCT group_id FROM peers)");
 }
-
-cleanStale();
-const cleanupInterval = setInterval(cleanStale, 60 * 60 * 1000);
-
-// Graceful shutdown
-function shutdown() {
-  clearInterval(cleanupInterval);
-  for (const ws of wsPool.values()) ws.close(1001, "Broker shutting down");
-  wsPool.clear();
-  db.close();
-  process.exit(0);
-}
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
 
 // --- Input limits ---
 
@@ -843,9 +829,34 @@ function authenticateRequest(req: Request): Peer | null {
   return peer;
 }
 
-// --- HTTP + WebSocket Server ---
+if (import.meta.main) {
+  // Reset stale active rows: on startup wsPool is empty, so any active peer in
+  // DB is a phantom from the previous process. Mark them dormant so they can be
+  // resumed via /resume rather than blocking new connections with 409.
+  {
+    const reset = db.run("UPDATE peers SET status = 'dormant' WHERE status = 'active'");
+    if (reset.changes > 0) {
+      console.error(`[claude-peers broker] Reset ${reset.changes} phantom active peer(s) to dormant on startup`);
+    }
+  }
 
-Bun.serve<WsData>({
+  cleanStale();
+  const cleanupInterval = setInterval(cleanStale, 60 * 60 * 1000);
+
+  // Graceful shutdown
+  function shutdown() {
+    clearInterval(cleanupInterval);
+    for (const ws of wsPool.values()) ws.close(1001, "Broker shutting down");
+    wsPool.clear();
+    db.close();
+    process.exit(0);
+  }
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
+  // --- HTTP + WebSocket Server ---
+
+  Bun.serve<WsData>({
   port: PORT,
   hostname: "0.0.0.0",
   maxRequestBodySize: 1024 * 1024, // 1MB limit on POST bodies
@@ -1096,3 +1107,7 @@ Bun.serve<WsData>({
 });
 
 console.error(`[claude-peers broker] listening on 0.0.0.0:${PORT} (db: ${DB_PATH})`);
+}
+
+// Exports for testing
+export { cleanStale, db, STALE_PEER_TTL_MS };
